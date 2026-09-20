@@ -3,59 +3,77 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useLanguage } from "./LanguageProvider";
+import EndGameOverlay from "./EndGameOverlay";
 
 export default function GlobalUI() {
   const pathname = usePathname();
   const { language } = useLanguage();
 
   const isVietnamese = language === "vi";
-
-  // Không hiện nút Settings khi đang ở trang Settings
-  if (pathname === "/settings") {
-    return null;
-  }
+  const isSettingsPage = pathname === "/settings";
 
   return (
-    <Link
-      href="/settings"
-      className="
-        fixed
-        right-4
-        top-4
-        z-50
+    <>
+      {/* =================================================
+          GLOBAL SETTINGS BUTTON
+          ================================================= */}
 
-        flex
-        h-11
-        w-11
-        items-center
-        justify-center
+      {!isSettingsPage && (
+        <Link
+          href="/settings"
+          className="
+            fixed
+            right-4
+            top-4
+            z-50
 
-        rounded-full
+            flex
+            h-11
+            w-11
+            items-center
+            justify-center
 
-        border
-        border-border
+            rounded-full
 
-        bg-card/90
-        text-foreground
+            border
+            border-border
 
-        text-xl
+            bg-card/90
+            text-foreground
 
-        shadow-lg
-        backdrop-blur
+            text-xl
 
-        transition-all
-        duration-200
+            shadow-lg
+            backdrop-blur
 
-        hover:bg-black/10
-        hover:shadow-xl
+            transition-all
+            duration-200
 
-        active:scale-95
+            hover:bg-black/10
+            hover:shadow-xl
 
-        dark:hover:bg-white/10
-      "
-      aria-label={isVietnamese ? "Cài đặt" : "Settings"}
-    >
-      ⚙️
-    </Link>
+            active:scale-95
+
+            dark:hover:bg-white/10
+          "
+          aria-label={
+            isVietnamese
+              ? "Cài đặt"
+              : "Settings"
+          }
+        >
+          ⚙️
+        </Link>
+      )}
+
+      {/* =================================================
+          GLOBAL END GAME OVERLAY
+
+          Luôn mount kể cả ở /settings.
+          Overlay tự quyết định khi nào hiện.
+          ================================================= */}
+
+      <EndGameOverlay />
+    </>
   );
 }

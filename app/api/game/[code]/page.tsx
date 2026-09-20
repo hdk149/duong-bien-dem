@@ -10,6 +10,7 @@ import {
 import { useParams, useRouter } from "next/navigation";
 import { useLanguage } from "../../../components/LanguageProvider";
 import { useTheme } from "../../../components/ThemeProvider";
+import { triggerEndGame } from "../../../components/EndGameOverlay";
 
 type Choice = {
   id: string;
@@ -106,6 +107,8 @@ type ApiError = {
 const PLAYER_STATS_STORAGE_KEY =
   "duong-bien-dem-player-stats-visible";
 
+const DEFAULT_GOAL_MONEY = 400_000_000;
+
 function formatMoney(value: number | string) {
   const number =
     typeof value === "number"
@@ -158,6 +161,19 @@ function getPlayerMoney(player: GamePlayer) {
   return player.money ?? 0;
 }
 
+function getNumericMoney(
+  value: number | string | undefined
+) {
+  const number =
+    typeof value === "number"
+      ? value
+      : Number(value);
+
+  return Number.isFinite(number)
+    ? number
+    : 0;
+}
+
 export default function GamePage() {
   const params = useParams();
   const router = useRouter();
@@ -191,7 +207,6 @@ export default function GamePage() {
   const [playersOpen, setPlayersOpen] =
     useState(false);
 
-  // Player Stats visibility is local to this device/browser.
   const [playerStatsVisible, setPlayerStatsVisible] =
     useState(true);
 
@@ -201,16 +216,165 @@ export default function GamePage() {
   const submittingRef =
     useRef(false);
 
+  /*
+   * ==========================================================
+   * END GAME
+   *
+   * Quan trọng:
+   * Không dùng state để chống trigger vì polling chạy liên tục.
+   * Ref đảm bảo overlay chỉ được gọi 1 lần.
+   * ==========================================================
+   */
+
+  const endGameTriggeredRef =
+    useRef(false);
+
+  const triggerGameEndOverlay =
+    useCallback(
+      (gameData: GameData) => {
+        if (
+          endGameTriggeredRef.current
+        ) {
+          return;
+        }
+
+        const roomStatus =
+          String(
+            gameData.room?.status ?? ""
+          ).toLowerCase();
+
+        const sessionStatus =
+          String(
+            gameData.session?.status ?? ""
+          ).toLowerCase();
+
+        const phase =
+          String(
+            gameData.session?.phase ?? ""
+          ).toLowerCase();
+
+        const currentMoney =
+          getNumericMoney(
+            gameData.currentPlayer
+              ?.money
+          );
+
+        const configuredGoal =
+          getNumericMoney(
+            gameData.room
+              ?.goalMoney ??
+              gameData.room
+                ?.goal_money
+          );
+
+        const goalMoney =
+          configuredGoal > 0
+            ? configuredGoal
+            : DEFAULT_GOAL_MONEY;
+
+        const forceFinished =
+          roomStatus ===
+            "finished" ||
+          sessionStatus ===
+            "finished" ||
+          phase ===
+            "finished";
+
+        const reachedGoal =
+          currentMoney >=
+          goalMoney;
+
+        if (
+          !forceFinished &&
+          !reachedGoal
+        ) {
+          return;
+        }
+
+        endGameTriggeredRef.current =
+          true;
+
+        const currentPlayer =
+          gameData.currentPlayer;
+
+        const playerName =
+          currentPlayer.playerName ||
+          currentPlayer.player_name ||
+          "Người sống sót";
+
+        const reason =
+          reachedGoal &&
+          !forceFinished
+            ? isVietnamese
+              ? "Bạn đã đạt mốc tài sản chiến thắng!"
+              : "You reached the victory wealth goal!"
+            : isVietnamese
+              ? "Trận đấu đã được kết thúc bởi hệ thống."
+              : "The game was ended by the system.";
+
+        console.log(
+          "[GAME] END GAME OVERLAY TRIGGERED",
+          {
+            code,
+            roomStatus,
+            sessionStatus,
+            phase,
+            currentMoney,
+            goalMoney,
+            reason,
+          }
+        );
+
+        triggerEndGame({
+          playerName,
+          money: currentMoney,
+          hp:
+            currentPlayer.hp ??
+            100,
+          location:
+            currentPlayer.location ||
+            "Việt Nam",
+          rounds:
+            gameData.session.round ??
+            0,
+          message:
+            isVietnamese
+              ? `Chúc mừng ${playerName}! ${reason} Cảm ơn bạn đã sống sót qua hành trình Đường Biên Đêm.`
+              : `Congratulations ${playerName}! ${reason} Thank you for surviving the Night Border journey.`,
+        });
+      },
+      [code, isVietnamese]
+    );
+
+  /*
+   * ==========================================================
+   * PLAYER TOKEN
+   * ==========================================================
+   */
+
   const getPlayerToken = useCallback(() => {
-    if (typeof window === "undefined") {
+    if (
+      typeof window ===
+      "undefined"
+    ) {
       return null;
     }
 
     return (
-      sessionStorage.getItem("player_token") ||
-      localStorage.getItem("player_token")
+      sessionStorage.getItem(
+        "player_token"
+      ) ||
+      localStorage.getItem(
+        "player_token"
+      )
     );
   }, []);
+
+  /*
+   * ==========================================================
+   * PLAYER STATS VISIBILITY
+   * ==========================================================
+   */
 
   useEffect(() => {
     try {
@@ -247,6 +411,12 @@ export default function GamePage() {
       return next;
     });
   }
+
+  /*
+   * ==========================================================
+   * LOAD GAME
+   * ==========================================================
+   */
 
   const loadGame = useCallback(
     async (silent = false) => {
@@ -354,6 +524,24 @@ export default function GamePage() {
           return;
         }
 
+        /*
+         * ======================================================
+         * QUAN TRỌNG
+         *
+         * Kiểm tra END GAME ngay khi nhận state từ server.
+         *
+         * Developer Force End:
+         *   room.status/session.status/phase = finished
+         *
+         * Goal:
+         *   currentPlayer.money >= goalMoney
+         * ======================================================
+         */
+
+        triggerGameEndOverlay(
+          gameData
+        );
+
         setGame(
           gameData
         );
@@ -419,12 +607,27 @@ export default function GamePage() {
       getPlayerToken,
       isVietnamese,
       router,
+      triggerGameEndOverlay,
     ]
   );
+
+  /*
+   * ==========================================================
+   * INITIAL LOAD
+   * ==========================================================
+   */
 
   useEffect(() => {
     loadGame(false);
   }, [loadGame]);
+
+  /*
+   * ==========================================================
+   * POLLING
+   *
+   * Force End được phát hiện tối đa sau ~1.5 giây.
+   * ==========================================================
+   */
 
   useEffect(() => {
     const interval =
@@ -444,6 +647,12 @@ export default function GamePage() {
       );
     };
   }, [loadGame]);
+
+  /*
+   * ==========================================================
+   * CHOOSE
+   * ==========================================================
+   */
 
   async function choose(
     choiceId: string
@@ -570,6 +779,12 @@ export default function GamePage() {
     }
   }
 
+  /*
+   * ==========================================================
+   * DERIVED STATE
+   * ==========================================================
+   */
+
   const phase =
     game?.session.phase ||
     "waiting";
@@ -588,7 +803,11 @@ export default function GamePage() {
     phase === "result";
 
   const isFinished =
-    phase === "finished";
+    phase === "finished" ||
+    game?.session.status ===
+      "finished" ||
+    game?.room.status ===
+      "finished";
 
   const hasSelected =
     game?.choiceStatus.selected ||
@@ -632,9 +851,11 @@ export default function GamePage() {
       );
     }, [game]);
 
-  /* ==========================================================
-     THEME
-     ========================================================== */
+  /*
+   * ==========================================================
+   * THEME
+   * ==========================================================
+   */
 
   const pageClass =
     isDark
@@ -666,9 +887,11 @@ export default function GamePage() {
       ? "text-[#c5bcae]"
       : "text-[#675e51]";
 
-  /* ==========================================================
-     LOADING
-     ========================================================== */
+  /*
+   * ==========================================================
+   * LOADING
+   * ==========================================================
+   */
 
   if (loading) {
     return (
@@ -716,9 +939,11 @@ export default function GamePage() {
     );
   }
 
-  /* ==========================================================
-     ERROR
-     ========================================================== */
+  /*
+   * ==========================================================
+   * ERROR
+   * ==========================================================
+   */
 
   if (!game) {
     return (
@@ -793,9 +1018,11 @@ export default function GamePage() {
     );
   }
 
-  /* ==========================================================
-     MAIN
-     ========================================================== */
+  /*
+   * ==========================================================
+   * MAIN
+   * ==========================================================
+   */
 
   return (
     <main
@@ -804,9 +1031,7 @@ export default function GamePage() {
       <div className="mx-auto min-h-[100dvh] w-full max-w-2xl">
         <div className="px-3 pb-32 pt-3 sm:px-5 sm:pt-5">
 
-          {/* ==================================================
-              TOP BAR
-          ================================================== */}
+          {/* TOP BAR */}
 
           <header className="mb-3 flex items-center justify-between px-1">
             <div>
@@ -840,18 +1065,13 @@ export default function GamePage() {
             </div>
           </header>
 
-          {/* ==================================================
-              EVENT CARD
-          ================================================== */}
+          {/* EVENT CARD */}
 
           {game.event && (
             <section
               className={`overflow-hidden rounded-[26px] border shadow-[0_18px_50px_rgba(65,48,30,0.10)] ${cardClass}`}
             >
-
-              {/* =================================================
-                  MY STATUS
-              ================================================= */}
+              {/* MY STATUS */}
 
               <div
                 className={`border-b px-3 py-3 sm:px-4 ${dividerClass}`}
@@ -946,12 +1166,10 @@ export default function GamePage() {
                 </div>
               </div>
 
-              {/* =================================================
-                  EVENT HEADER
-              ================================================= */}
+              {/* EVENT HEADER */}
 
               <div
-                className={`px-4 pb-5 pt-5 sm:px-5 sm:pb-6 sm:pt-6`}
+                className="px-4 pb-5 pt-5 sm:px-5 sm:pb-6 sm:pt-6"
               >
                 <div className="flex items-center gap-2">
                   <span
@@ -998,9 +1216,7 @@ export default function GamePage() {
                 </p>
               </div>
 
-              {/* =================================================
-                  CHOICES
-              ================================================= */}
+              {/* CHOICES */}
 
               {isChoosing && (
                 <div
@@ -1126,9 +1342,7 @@ export default function GamePage() {
             </section>
           )}
 
-          {/* ==================================================
-              PLAYER STATS
-          ================================================== */}
+          {/* PLAYER STATS */}
 
           {otherPlayers.length > 0 && (
             <section
@@ -1349,9 +1563,7 @@ export default function GamePage() {
             </section>
           )}
 
-          {/* ==================================================
-              GENERATING
-          ================================================== */}
+          {/* GENERATING */}
 
           {isGenerating && (
             <section
@@ -1397,9 +1609,7 @@ export default function GamePage() {
             </section>
           )}
 
-          {/* ==================================================
-              RESOLVING
-          ================================================== */}
+          {/* RESOLVING */}
 
           {isResolving && (
             <section
@@ -1435,9 +1645,7 @@ export default function GamePage() {
             </section>
           )}
 
-          {/* ==================================================
-              RESULT
-          ================================================== */}
+          {/* RESULT */}
 
           {isResult && (
             <section
@@ -1473,9 +1681,7 @@ export default function GamePage() {
             </section>
           )}
 
-          {/* ==================================================
-              FINISHED
-          ================================================== */}
+          {/* FINISHED */}
 
           {isFinished && (
             <section
@@ -1503,9 +1709,7 @@ export default function GamePage() {
             </section>
           )}
 
-          {/* ==================================================
-              ERROR
-          ================================================== */}
+          {/* ERROR */}
 
           {error && (
             <div
