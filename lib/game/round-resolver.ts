@@ -9,12 +9,15 @@ import type {
 } from "./stats";
 
 import {
-  generateAIHostRoundBatch,
+  generateAIHostOutcomeGroq,
+  generateAIHostNextEventsGroq,
   type AIOutcomeContext,
+  type AIHostPlayerContext,
 } from "./ai/host";
 
 import type {
   ValidatedAIOutcomeResponse,
+  ValidatedAIEventResponse,
 } from "./ai/validate";
 
 import {
@@ -100,9 +103,9 @@ export type RoundResolveResult = {
 
   aiResponse:
     ValidatedAIOutcomeResponse;
-  nextEvents:
-  import("./ai/validate").ValidatedAIEventResponse;  
 
+  nextEvents:
+    ValidatedAIEventResponse;
 };
 
 /* =====================================================
@@ -125,6 +128,22 @@ function getPlayerStats(
     legal_risk:
       player.legal_risk,
   };
+}
+
+/* =====================================================
+   GET ROUNDS IN LOCATION
+   ===================================================== */
+
+function getRoundsInLocation(
+  player: Player
+): number {
+  return (
+    (
+      player as Player & {
+        rounds_in_location?: number;
+      }
+    ).rounds_in_location ?? 1
+  );
 }
 
 /* =====================================================
@@ -170,7 +189,7 @@ function normalizeChoices(
     ) => {
       if (
         typeof choice !==
-        "object" ||
+          "object" ||
         choice === null
       ) {
         throw new Error(
@@ -246,7 +265,6 @@ function buildAIOutcomeContext(
               (event) =>
                 event.player_id ===
                 player.id
-                
             );
 
           if (!playerEvent) {
@@ -305,26 +323,28 @@ function buildAIOutcomeContext(
 
             last_choice:
               player.last_choice,
+
             rounds_in_location:
-  (player as typeof player & {
-  rounds_in_location?: number;
-}).rounds_in_location ?? 1,  
+              getRoundsInLocation(
+                player
+              ),
 
             event: {
-  title:
-    playerEvent.title,
+              title:
+                playerEvent.title,
 
-  description:
-    playerEvent.description,
+              description:
+                playerEvent.description,
 
-  type:
-    playerEvent.event_type,
+              type:
+                playerEvent.event_type,
 
-  destination:
-    playerEvent.destination ?? null,
+              destination:
+                playerEvent.destination ??
+                null,
 
-  choices,
-},
+              choices,
+            },
 
             chosen_choice_id:
               chosenChoice.id,
@@ -333,6 +353,211 @@ function buildAIOutcomeContext(
               chosenChoice.text,
           };
         }
+      ),
+  };
+}
+
+/* =====================================================
+   BUILD NEXT-ROUND AI CONTEXT
+   =====================================================
+
+   IMPORTANT:
+
+   This MUST be built from the state AFTER the current
+   round's effects have been applied.
+
+   This is what prevents the AI from generating a
+   next-round event using the player's old location.
+
+   Example:
+
+     Round 6:
+       location = TP.HCM
+       choice = travel to Đà Lạt
+
+     server resolves:
+       location -> Đà Lạt
+
+     THEN:
+
+     Round 7 AI receives:
+       location = Đà Lạt
+
+   Not TP.HCM.
+   ===================================================== */
+
+function buildNextRoundPlayers(
+  round: number,
+  players: Player[],
+  resolvedPlayers: PlayerRoundResolveResult[]
+): AIHostPlayerContext[] {
+  return resolvedPlayers.map(
+    (resolved) => {
+      const originalPlayer =
+        players.find(
+          (player) =>
+            player.id ===
+            resolved.player.id
+        );
+
+      if (!originalPlayer) {
+        throw new Error(
+          `Original player ${resolved.player.id} not found while building next-round AI context.`
+        );
+      }
+
+      const after =
+        resolved.application.after;
+
+      const beforeLocation =
+        originalPlayer.location.trim();
+
+      const afterLocation =
+        after.location.trim();
+
+      const sameLocation =
+        beforeLocation ===
+        afterLocation;
+
+      const previousRounds =
+        getRoundsInLocation(
+          originalPlayer
+        );
+
+      const roundsInLocation =
+        sameLocation
+          ? previousRounds + 1
+          : 1;
+
+      return {
+        id:
+          originalPlayer.id,
+
+        player_name:
+          originalPlayer.player_name,
+
+        hp:
+          after.hp,
+
+        money:
+          after.money,
+
+        location:
+          after.location,
+
+        legal_risk:
+          after.legal_risk,
+
+        /*
+         * The choice that produced the current state
+         * becomes the latest choice for the next event
+         * generation.
+         */
+        last_choice:
+          resolved.vote.choice_id,
+
+        rounds_in_location:
+          roundsInLocation,
+      };
+    }
+  );
+}
+
+/* =====================================================
+   BUILD SAFE NEXT EVENTS FALLBACK
+   ===================================================== */
+
+function buildFallbackNextEvents(
+  round: number,
+  resolvedPlayers: PlayerRoundResolveResult[]
+): ValidatedAIEventResponse {
+  return {
+    round:
+      round + 1,
+
+    players:
+      resolvedPlayers.map(
+        (resolved) => ({
+          player_id:
+            resolved.player.id,
+
+          event: {
+            title:
+              `Một ngày mới - Vòng ${round + 1}`,
+
+            description:
+              `Bạn đang ở ${resolved.application.after.location}. Một ngày mới bắt đầu và bạn phải quyết định bước tiếp theo.`,
+
+            type:
+              "normal",
+
+            choices: [
+              {
+                id:
+                  "continue",
+
+                text:
+                  "Tiếp tục tiến lên",
+              },
+
+              {
+                id:
+                  "money",
+
+                text:
+                  "Tìm cơ hội kiếm tiền",
+              },
+
+              {
+                id:
+                  "rest",
+
+                text:
+                  "Nghỉ ngơi",
+              },
+
+              {
+                id:
+                  "explore",
+
+                text:
+                  "Khám phá khu vực",
+              },
+            ],
+          },
+        })
+      ),
+  };
+}
+
+/* =====================================================
+   BUILD SAFE OUTCOME FALLBACK
+   ===================================================== */
+
+function buildFallbackOutcome(
+  round: number,
+  players: Player[]
+): ValidatedAIOutcomeResponse {
+  return {
+    round,
+
+    players:
+      players.map(
+        (player) => ({
+          player_id:
+            player.id,
+
+          effects: {
+            hp:
+              0,
+
+            money:
+              0,
+
+            legal_risk:
+              0,
+          },
+        })
       ),
   };
 }
@@ -465,14 +690,7 @@ export async function resolveRound(
   }
 
   /* ===================================================
-     GENERATE OUTCOMES
-     
-     IMPORTANT:
-     
-     Gemini receives the EXACT event and EXACT choice
-     for every player.
-     
-     It does NOT generate a new event here.
+     BUILD CURRENT-ROUND AI OUTCOME CONTEXT
      =================================================== */
 
   const aiContext =
@@ -483,102 +701,38 @@ export async function resolveRound(
       voteMap
     );
 
-    
+  /* ===================================================
+     GENERATE OUTCOMES ONLY
+     
+     IMPORTANT:
+     
+     Do NOT generate next-round events here.
+
+     The next event must be generated only AFTER
+     server-side outcome application because travel,
+     money, HP, legal risk, etc. may change.
+     =================================================== */
 
   let aiResponse:
-  ValidatedAIOutcomeResponse;
+    ValidatedAIOutcomeResponse;
 
-let nextEvents:
-  import("./ai/validate").ValidatedAIEventResponse;
+  try {
+    aiResponse =
+      await generateAIHostOutcomeGroq(
+        aiContext
+      );
+  } catch (error) {
+    console.warn(
+      "GROQ OUTCOME GENERATION FAILED — using safe fallback.",
+      error
+    );
 
-try {
-  const batch =
-    await generateAIHostRoundBatch({
-      round,
-
-      outcomePlayers:
-        aiContext.players,
-
-      nextRoundPlayers:
-        aiContext.players,
-    });
-
-  aiResponse =
-    batch.outcomes;
-
-  nextEvents =
-    batch.nextEvents;
-} catch (error) {
-  console.warn(
-    "GEMINI ROUND BATCH FAILED — using safe fallback.",
-    error
-  );
-
-  aiResponse = {
-    round,
-
-    players:
-      players.map(
-        (player) => ({
-          player_id:
-            player.id,
-
-          effects: {
-            hp: 0,
-            money: 0,
-            legal_risk: 0,
-          },
-        })
-      ),
-  };
-
-  nextEvents = {
-    round:
-      round + 1,
-
-    players:
-      players.map(
-        (player) => ({
-          player_id:
-            player.id,
-
-          event: {
-            title:
-              `Một ngày mới - Vòng ${round + 1}`,
-
-            description:
-              `Bạn đang ở ${player.location}. Một ngày mới bắt đầu và bạn phải quyết định bước tiếp theo.`,
-
-            type:
-              "normal",
-
-            choices: [
-              {
-                id: "continue",
-                text:
-                  "Tiếp tục tiến lên",
-              },
-              {
-                id: "money",
-                text:
-                  "Tìm cơ hội kiếm tiền",
-              },
-              {
-                id: "rest",
-                text:
-                  "Nghỉ ngơi",
-              },
-              {
-                id: "explore",
-                text:
-                  "Khám phá khu vực",
-              },
-            ],
-          },
-        })
-      ),
-  };
-}
+    aiResponse =
+      buildFallbackOutcome(
+        round,
+        players
+      );
+  }
 
   /* ===================================================
      APPLY OUTCOMES
@@ -634,49 +788,61 @@ try {
      * structure expected by applyPlayerResult().
      */
     const normalizedEvent = {
-  title:
-    playerEvent.title,
+      title:
+        playerEvent.title,
 
-  description:
-    playerEvent.description,
+      description:
+        playerEvent.description,
 
-  type:
-    playerEvent.event_type,
+      type:
+        playerEvent.event_type,
 
-  destination:
-    playerEvent.destination ?? null,
+      destination:
+        playerEvent.destination ??
+        null,
 
-  choices:
-    normalizeChoices(
-      playerEvent.choices
-    ),
-};
+      choices:
+        normalizeChoices(
+          playerEvent.choices
+        ),
+    };
 
-    /*
-     * LOCATION / TRAVEL SAFETY
-     *
-     * The AI may only move a player to the destination explicitly
-     * attached to this private event.
-     *
-     * This prevents the AI from inventing an arbitrary location
-     * and effectively teleporting the player.
-     *
-     * The AI still decides whether the selected choice actually
-     * results in travel. If it does not return a location effect,
-     * the player's current location is preserved.
-     */
+    /* =================================================
+       LOCATION / TRAVEL SAFETY
+       =================================================
+
+       The AI may only move a player to the destination
+       explicitly attached to this private event.
+
+       The AI cannot invent a location.
+
+       Travel is therefore:
+
+         AI choice consequence
+               ↓
+         requested location
+               ↓
+         compare with event.destination
+               ↓
+         accept/reject
+    */
+
     const safeEffects = {
       ...aiOutcome.effects,
     };
 
     if (
-      safeEffects.location !== undefined
+      safeEffects.location !==
+      undefined
     ) {
       const destination =
         normalizedEvent.destination;
 
       const requestedLocation =
-        safeEffects.location.trim();
+        typeof safeEffects.location ===
+        "string"
+          ? safeEffects.location.trim()
+          : "";
 
       const currentLocation =
         player.location.trim();
@@ -695,6 +861,10 @@ try {
         delete safeEffects.location;
       }
     }
+
+    /* =================================================
+       SERVER-SIDE STATE APPLICATION
+       ================================================= */
 
     const application =
       applyPlayerResult(
@@ -722,16 +892,84 @@ try {
     });
   }
 
+  /* ===================================================
+     IMPORTANT:
+     
+     AT THIS POINT ALL CURRENT-ROUND OUTCOMES HAVE
+     BEEN APPLIED IN MEMORY.
+     
+     application.after now contains the real state
+     that the next-round AI must see.
+     =================================================== */
+
+  const nextRoundPlayers =
+    buildNextRoundPlayers(
+      round,
+      players,
+      resolvedPlayers
+    );
+
+  /* ===================================================
+     GENERATE NEXT-ROUND EVENTS
+     
+     This is intentionally AFTER outcome application.
+     
+     Therefore:
+     
+       current location
+             ↓
+       player chooses travel
+             ↓
+       server validates travel
+             ↓
+       application.after.location
+             ↓
+       nextRoundPlayers.location
+             ↓
+       AI generates next event
+     
+     No stale location.
+     =================================================== */
+
+  let nextEvents:
+    ValidatedAIEventResponse;
+
+  try {
+    nextEvents =
+      await generateAIHostNextEventsGroq({
+        round:
+          round + 1,
+
+        players:
+          nextRoundPlayers,
+      });
+  } catch (error) {
+    console.warn(
+      "GROQ NEXT-EVENT GENERATION FAILED — using safe fallback.",
+      error
+    );
+
+    nextEvents =
+      buildFallbackNextEvents(
+        round,
+        resolvedPlayers
+      );
+  }
+
+  /* ===================================================
+     FINAL RESULT
+     =================================================== */
+
   return {
-  round,
+    round,
 
-  event,
+    event,
 
-  players:
-    resolvedPlayers,
+    players:
+      resolvedPlayers,
 
-  aiResponse,
+    aiResponse,
 
-  nextEvents,
-};
+    nextEvents,
+  };
 }

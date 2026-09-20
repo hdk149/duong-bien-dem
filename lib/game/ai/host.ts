@@ -55,10 +55,10 @@ async function generateWithRetry<T>(
       lastError = error;
 
       const message =
-        error instanceof Error ? error.message : String(error);
+        error instanceof Error
+          ? error.message
+          : String(error);
 
-      // Daily quota / request quota:
-      // retry không có ích, vì quota không reset sau vài giây.
       const isQuotaExceeded =
         message.includes("429") &&
         (
@@ -72,6 +72,7 @@ async function generateWithRetry<T>(
         console.warn(
           "GEMINI QUOTA EXCEEDED — using fallback instead of retrying.",
         );
+
         throw error;
       }
 
@@ -128,7 +129,7 @@ export type AIHostContext = {
 };
 
 /* =====================================================
-   EVENT GENERATION
+   EVENT GENERATION PROMPT
    ===================================================== */
 
 function buildEventPrompt(
@@ -152,13 +153,14 @@ IMPORTANT RULES:
    - legal risk
    - previous choice
    - round number
+   - rounds_in_location
 4. The event should make sense for the player's current situation.
 5. Do not directly modify the database.
 6. Do NOT generate consequences or effects yet.
 7. Do NOT generate hp changes.
 8. Do NOT generate money changes.
 9. Do NOT generate legal_risk changes.
-10. Do NOT generate location changes.
+10. Do NOT directly change the player's location.
 11. Do not invent player IDs.
 12. Keep events suitable for a general audience.
 13. The game can contain fictional danger, accidents, financial problems, travel problems, jobs, opportunities, NPC encounters, and fictional legal consequences, but do not provide real-world instructions for wrongdoing.
@@ -178,18 +180,177 @@ IMPORTANT RULES:
 27. New story threads may be introduced when appropriate.
 28. Each event should contribute either to an existing thread or establish a potentially reusable thread.
 29. Do not reveal or pre-generate the consequence of a choice.
+30. Do not automatically move the player.
+31. If an event offers travel, the destination is only an opportunity.
+32. The player must choose to actually travel before the server can change location.
 
-CURRENT ROUND:
+=====================================================
+TRAVEL / DESTINATION RULES
+=====================================================
+
+The "destination" field represents WHERE A TRAVEL OPPORTUNITY LEADS.
+
+It does NOT mean that the player has already travelled.
+
+For an ordinary non-travel event:
+
+"destination": null
+
+For a genuine travel opportunity:
+
+"destination": "Tên địa điểm"
+
+Travel opportunities should have a believable reason, such as:
+
+- paid work elsewhere
+- temporary employment
+- delivery or transport work
+- an NPC connection
+- a business opportunity
+- information about a better opportunity
+- transportation offered in exchange for work
+- a believable reason to leave a dangerous situation
+- continuation of an existing story thread elsewhere
+
+A travel destination:
+
+1. Must differ from the player's current location.
+2. Must be connected to the event.
+3. Must have a concrete reason for the player to go there.
+4. Should provide something meaningful to gain or risk.
+5. Must have at least one choice that can actually pursue the travel opportunity.
+
+Do NOT:
+- teleport the player
+- assume the player accepted the trip
+- make the player travel automatically
+- invent unexplained free transportation
+- repeatedly force travel without story justification
+
+If the player only:
+- investigates
+- asks questions
+- negotiates
+- prepares
+- delays
+- refuses
+
+then the event still remains at the current location.
+
+=====================================================
+JOURNEY & LOCATION PROGRESSION
+=====================================================
+
+The game is an evolving survival journey.
+
+Use rounds_in_location as a strong narrative signal.
+
+If rounds_in_location is low:
+- local survival events are fine
+- small jobs are fine
+- NPC encounters are fine
+- preparation is fine
+
+If rounds_in_location >= 3:
+- begin increasing meaningful opportunities that could lead elsewhere
+
+If rounds_in_location >= 5:
+- strongly consider a believable opportunity to leave
+- work
+- money
+- transport
+- NPC connections
+- information
+- useful opportunity elsewhere
+
+If rounds_in_location >= 8:
+- strongly prioritize meaningful mobility or progression
+- another city
+- another province
+- another region
+- eventually another country
+
+Do not keep generating generic local jobs forever unless an important
+unresolved story thread requires the player to stay.
+
+The player must retain agency.
+
+=====================================================
+INTERNATIONAL PROGRESSION
+=====================================================
+
+Foreign travel is allowed but should feel like progression.
+
+Do not immediately teleport players abroad.
+
+International opportunities should normally develop through believable steps:
+
+- hearing about work abroad
+- meeting an overseas contact
+- receiving a job lead
+- finding a sponsor/contact
+- earning money
+- preparing documents
+- arranging transportation
+- dealing with practical or legal obstacles
+
+The player should retain choices such as:
+
+ACCEPT
+REFUSE
+INVESTIGATE
+NEGOTIATE
+DELAY
+FIND AN ALTERNATIVE
+
+These are narrative choices only.
+
+Do not generate mechanical effects inside the event.
+
+=====================================================
+EVENT DESIGN
+=====================================================
+
+Every event should feel like a concrete scene.
+
+Prefer:
+- recognizable setting
+- specific NPC or situation
+- reason the player is involved
+- tension or uncertainty
+- meaningful decision
+
+Avoid generic events such as:
+
+"Bạn gặp một người lạ."
+
+"Bạn thấy một cơ hội kiếm tiền."
+
+"Bạn gặp một vấn đề."
+
+Events should be vivid but concise.
+
+Different players should not receive identical generic events.
+
+=====================================================
+CURRENT ROUND
+=====================================================
+
+Round:
 ${context.round}
 
-PLAYERS:
+Players:
 ${JSON.stringify(
   context.players,
   null,
   2
 )}
 
-RETURN ONLY VALID JSON.
+=====================================================
+OUTPUT
+=====================================================
+
+Return ONLY valid JSON.
 
 The JSON must have exactly this structure:
 
@@ -202,6 +363,7 @@ The JSON must have exactly this structure:
         "title": "string",
         "description": "string",
         "type": "string",
+        "destination": "string or null",
         "choices": [
           {
             "id": "string",
@@ -215,12 +377,26 @@ The JSON must have exactly this structure:
 
 The "players" array must contain exactly the same players supplied above.
 
-DO NOT include an "effects" field anywhere.
+Rules:
+
+- Every player gets exactly one event.
+- Every event has 2 to 4 choices.
+- Every choice has a unique ID inside that event.
+- destination must be null for ordinary events.
+- destination must be a concrete different location for travel opportunities.
+- destination does not itself move the player.
+- Do not include an "effects" field anywhere.
+- Do not include HP changes.
+- Do not include money changes.
+- Do not include legal risk changes.
+- Do not include automatic location changes.
+
+Return valid JSON only.
 `;
 }
 
 /* =====================================================
-   OUTCOME / RESOLVE PROMPT
+   OUTCOME / RESOLVE CONTEXT
    ===================================================== */
 
 export type AIOutcomePlayerContext =
@@ -248,6 +424,7 @@ export type AIOutcomeContext = {
   round: number;
   players: AIOutcomePlayerContext[];
 };
+
 /* =====================================================
    ROUND BATCH CONTEXT
    ===================================================== */
@@ -260,20 +437,171 @@ export type AIRoundBatchContext = {
 
 export type AIRoundBatchResponse = {
   round: number;
-
   outcomes: ValidatedAIOutcomeResponse;
-
   nextEvents: ValidatedAIEventResponse;
 };
 
 /* =====================================================
+   OUTCOME PROMPT
+   ===================================================== */
+
+function buildOutcomePrompt(
+  context: AIOutcomeContext
+): string {
+  return `
+You are the AI Game Host for a Vietnamese multiplayer survival/travel RPG called "Đường Biên Đêm".
+
+The game is fictional.
+
+You are now RESOLVING player choices.
+
+Each player has already received a specific event and has selected one specific choice.
+
+Your job is to determine the outcome of EACH player's exact event and exact chosen choice.
+
+IMPORTANT RULES:
+
+1. Every player must receive exactly one outcome.
+2. Resolve each player independently.
+3. Use the exact event provided for that player.
+4. Use the exact chosen choice provided for that player.
+5. Do not change the event.
+6. Do not invent a different choice.
+7. Do not generate new choices.
+8. Consider the player's current:
+   - HP
+   - money
+   - location
+   - legal risk
+   - previous choice
+   - rounds_in_location
+9. Effects are CHANGES, not absolute values.
+10. hp is an integer change.
+11. money is an integer change.
+12. legal_risk is an integer change from -10 to +10.
+13. location should only be returned if the player's location actually changes.
+
+=====================================================
+TRAVEL RULE — CRITICAL
+=====================================================
+
+If the event contains a destination, that destination represents an
+OPPORTUNITY to travel.
+
+It is NOT an automatic location change.
+
+The player must have selected a choice that clearly:
+
+- accepts the trip
+- pursues the opportunity
+- completes the travel
+- commits to actually going
+
+before an effects.location may be returned.
+
+If the selected choice:
+
+- refuses
+- delays
+- investigates
+- negotiates
+- prepares
+- asks questions
+- considers the opportunity
+- stays
+
+then DO NOT return effects.location.
+
+If actual travel occurs:
+
+effects.location MUST be exactly event.destination.
+
+NEVER invent a different destination.
+
+If event.destination is null:
+
+NEVER return effects.location.
+
+Do not teleport the player merely because a destination exists.
+
+The server will validate the location change after this response.
+
+=====================================================
+EFFECT RULES
+=====================================================
+
+Effects should normally be moderate.
+
+Different choices should generally produce meaningfully different outcomes.
+
+Do not directly modify the database.
+
+Do not invent player IDs.
+
+Do not provide real-world instructions for wrongdoing.
+
+Keep the game suitable for a general audience.
+
+=====================================================
+CURRENT ROUND
+=====================================================
+
+Round:
+${context.round}
+
+Players and their exact events / choices:
+
+${JSON.stringify(
+  context.players,
+  null,
+  2
+)}
+
+=====================================================
+OUTPUT
+=====================================================
+
+Return ONLY valid JSON.
+
+The JSON must have exactly this structure:
+
+{
+  "round": number,
+  "players": [
+    {
+      "player_id": "UUID",
+      "effects": {
+        "hp": number,
+        "money": number,
+        "location": "string",
+        "legal_risk": number
+      }
+    }
+  ]
+}
+
+The "players" array must contain exactly the same players supplied above.
+
+Rules:
+
+- effects.hp is an integer CHANGE.
+- effects.money is an integer CHANGE.
+- effects.legal_risk is an integer CHANGE.
+- effects.location is optional.
+- Only include effects.location for actual travel.
+- effects.location must exactly equal event.destination.
+- Do not return events.
+- Do not return choices.
+- Do not return a different choice.
+- Do not invent player IDs.
+- Only return effects produced by the exact selected choice.
+
+Return valid JSON only.
+`;
+}
+
+/* =====================================================
    BATCH PROMPT
-
-   ONE GEMINI REQUEST:
-   - resolve current round
-   - generate next round events
-
-   This replaces the old 2-request flow.
    ===================================================== */
 
 function buildRoundBatchPrompt(
@@ -288,6 +616,7 @@ TASK A — Resolve every player's CURRENT choice.
 TASK B — Generate exactly one NEXT ROUND event for every player.
 
 GENERAL RULES:
+
 - Complete both tasks for every player.
 - Keep current-round outcomes separate from next-round events.
 - Do not modify the database.
@@ -303,6 +632,7 @@ TASK A — CURRENT ROUND OUTCOMES
 Resolve the exact choice selected by each player for the exact event shown to them.
 
 Rules:
+
 1. Generate exactly one outcome for every player.
 2. The outcome must match the exact event shown to that player.
 3. The outcome must specifically correspond to the selected choice.
@@ -312,9 +642,8 @@ Rules:
 7. legal_risk changes must be integers from -10 to +10.
 8. Return location ONLY when the player's location actually changes.
 9. Effects should normally be moderate.
-10. Do not directly modify the database.
 
-TRAVEL RULES — CRITICAL:
+TRAVEL RULES:
 
 - event.destination is an OPPORTUNITY, not an automatic location change.
 - A destination existing by itself is NEVER enough to change location.
@@ -326,34 +655,19 @@ TRAVEL RULES — CRITICAL:
 - NEVER teleport a player merely because a destination exists.
 - The server will validate the location change.
 
-Examples:
-
-destination = "Đà Nẵng"
-
-Choice:
-"Nhận công việc và đi theo chuyến xe đến Đà Nẵng."
-→ effects.location = "Đà Nẵng"
-
-Choice:
-"Từ chối công việc và ở lại."
-→ no location field
-
-Choice:
-"Hỏi thêm về công việc trước khi quyết định."
-→ no location field
-
-Choice:
-"Chấp nhận nhưng hẹn ngày mai mới đi."
-→ no location field
-
 =====================================================
 CURRENT ROUND
 =====================================================
 
-Round: ${context.round}
+Round:
+${context.round}
 
 Players:
-${JSON.stringify(context.outcomePlayers, null, 2)}
+${JSON.stringify(
+  context.outcomePlayers,
+  null,
+  2
+)}
 
 =====================================================
 TASK B — NEXT ROUND EVENTS
@@ -361,10 +675,8 @@ TASK B — NEXT ROUND EVENTS
 
 Generate exactly ONE event for every player for round ${context.round + 1}.
 
-The game is an evolving survival journey, not a collection of disconnected
-random events.
-
 Use each player's:
+
 - current location
 - rounds_in_location
 - money
@@ -387,6 +699,7 @@ STORY CONTINUITY
 Prefer meaningful continuity when appropriate.
 
 A previous choice may create:
+
 - an unresolved problem
 - an NPC relationship
 - a new opportunity
@@ -410,33 +723,37 @@ story thread can naturally continue.
 JOURNEY & LOCATION PROGRESSION
 =====================================================
 
-The game should gradually allow players to survive, earn money, meet people,
-discover opportunities, travel and expand their world.
-
-rounds_in_location is an important signal.
-
 If rounds_in_location is low:
-- Local survival events, small jobs, NPC encounters and preparation are fine.
+
+- local survival events are fine
+- small jobs are fine
+- NPC encounters are fine
+- preparation is fine
 
 If rounds_in_location >= 3:
-- Begin increasing meaningful opportunities that could lead elsewhere.
+
+- begin increasing meaningful opportunities that could lead elsewhere
 
 If rounds_in_location >= 5:
-- Strongly consider an opportunity that gives the player a believable reason
-  to leave the current location.
-- Prefer work, money, transport, NPC connections, information, escape from a
-  problem, or a useful opportunity elsewhere.
-- Staying is still allowed if justified by the story.
+
+- strongly consider an opportunity that gives the player a believable reason
+  to leave the current location
 
 If rounds_in_location >= 8:
-- Strongly prioritize meaningful mobility or progression.
-- Prefer another city, province, region, or eventually another country.
-- Do not keep producing generic local jobs or minor random encounters unless
-  an important unresolved story thread requires staying.
+
+- strongly prioritize meaningful mobility or progression
+
+Prefer:
+
+- another city
+- another province
+- another region
+- eventually another country
+
+Do not keep producing generic local jobs unless an important unresolved
+story thread requires staying.
 
 The AI must NEVER automatically move the player.
-The event may offer travel, but the player's choice determines whether travel
-is pursued.
 
 =====================================================
 TRAVEL OPPORTUNITIES
@@ -445,6 +762,7 @@ TRAVEL OPPORTUNITIES
 A travel event must have a concrete reason for the player to go somewhere.
 
 Good reasons include:
+
 - paid work elsewhere
 - delivery or transport work
 - temporary employment
@@ -456,6 +774,7 @@ Good reasons include:
 - a believable reason to leave a dangerous situation
 
 Avoid:
+
 - random unexplained jobs
 - sudden decisions to travel
 - unexplained free transportation
@@ -470,16 +789,15 @@ When creating a travel opportunity:
 4. Give the player something meaningful to gain.
 5. Give the player something meaningful to risk or give up.
 6. Include at least one choice that can pursue the opportunity.
-7. Do not reveal the final consequence of the choice.
+7. Do not reveal the final consequence.
 
 The destination describes WHERE THE OPPORTUNITY LEADS.
+
 It does NOT mean the player has already travelled there.
 
 For ordinary non-travel events:
-destination = null
 
-Do not repeatedly use the same destination unless an existing story thread
-requires it.
+destination = null
 
 =====================================================
 INTERNATIONAL PROGRESSION
@@ -491,6 +809,7 @@ Do not immediately teleport players abroad.
 
 International opportunities should normally develop through believable story
 steps such as:
+
 - hearing about work abroad
 - meeting an overseas contact
 - receiving a job lead
@@ -501,10 +820,15 @@ steps such as:
 - dealing with practical or legal obstacles
 
 The player must retain agency through choices such as:
-ACCEPT / REFUSE / INVESTIGATE / NEGOTIATE / DELAY / FIND AN ALTERNATIVE
 
-These are narrative choices only. Do not create mechanical effects for the
-next event.
+ACCEPT
+REFUSE
+INVESTIGATE
+NEGOTIATE
+DELAY
+FIND AN ALTERNATIVE
+
+These are narrative choices only.
 
 =====================================================
 EVENT DESIGN
@@ -513,6 +837,7 @@ EVENT DESIGN
 Every event should feel like a concrete scene.
 
 Prefer:
+
 - recognizable setting
 - specific NPC or situation
 - reason the player is involved
@@ -520,15 +845,17 @@ Prefer:
 - meaningful decision
 
 Avoid generic:
+
 "Bạn gặp một người lạ."
+
 "Bạn thấy một cơ hội kiếm tiền."
+
 "Bạn gặp một vấn đề."
 
-Events should be vivid but concise.
-
 Each event:
+
 - has 2 to 4 choices
-- choices have unique IDs within that event
+- choices have unique IDs
 - choices represent meaningful decisions
 - does not state the consequences
 - does not contain hp/money/legal_risk effects
@@ -541,27 +868,36 @@ PLAYER STATE FOR NEXT ROUND
 =====================================================
 
 CURRENT ROUND PLAYERS:
-${JSON.stringify(context.outcomePlayers, null, 2)}
+
+${JSON.stringify(
+  context.outcomePlayers,
+  null,
+  2
+)}
 
 NEXT ROUND PLAYER STATE:
-${JSON.stringify(context.nextRoundPlayers, null, 2)}
+
+${JSON.stringify(
+  context.nextRoundPlayers,
+  null,
+  2
+)}
 
 NEXT ROUND:
+
 ${context.round + 1}
 
 =====================================================
-OUTPUT REQUIREMENTS — CRITICAL
+OUTPUT REQUIREMENTS
 =====================================================
 
 Return ONLY valid JSON.
 
 The top-level object MUST contain exactly:
+
 - round
 - outcomes
 - nextEvents
-
-NEVER omit outcomes.
-NEVER omit nextEvents.
 
 Structure:
 
@@ -603,24 +939,182 @@ Structure:
 }
 
 OUTCOME RULES:
+
 - outcomes.players must contain exactly the same player IDs as CURRENT ROUND PLAYERS.
-- effects.location is optional and should only exist for actual travel.
-- Do not add an outcome message field unless the schema explicitly supports it.
+- effects.location is optional.
+- effects.location must only be used for actual travel.
+- effects.location must exactly equal event.destination.
 
 NEXT EVENT RULES:
+
 - nextEvents.players must contain exactly the same player IDs as NEXT ROUND PLAYER STATE.
 - Every player gets exactly one event.
-- destination must be a concrete destination for travel opportunities.
-- destination must be null for ordinary non-travel events.
+- destination must be concrete for travel opportunities.
+- destination must be null for ordinary events.
 - Never include mechanical effects in nextEvents.
-- Do not add any fields not shown in the schema.
+- Do not add fields not shown in the schema.
 
 Return valid JSON only.
 `;
 }
 
 /* =====================================================
-   GENERATE ONE REQUEST FOR OUTCOME + NEXT EVENTS
+   GROQ — GENERATE CURRENT ROUND OUTCOME ONLY
+   ===================================================== */
+
+export async function generateAIHostOutcomeGroq(
+  context: AIOutcomeContext
+): Promise<ValidatedAIOutcomeResponse> {
+  const apiKey = process.env.GROQ_API_KEY;
+
+  if (!apiKey) {
+    throw new Error(
+      "GROQ_API_KEY is not configured."
+    );
+  }
+
+  const groq = new Groq({
+    apiKey,
+  });
+
+  const prompt =
+    buildOutcomePrompt(
+      context
+    );
+
+  const response =
+    await groq.chat.completions.create({
+      model: "openai/gpt-oss-20b",
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      temperature: 0.6,
+      reasoning_effort: "low",
+      include_reasoning: false,
+      max_completion_tokens: 1024,
+      response_format: {
+        type: "json_object",
+      },
+    });
+
+  const responseText =
+    response.choices[0]?.message?.content;
+
+  if (!responseText) {
+    throw new Error(
+      "Groq returned an empty outcome response."
+    );
+  }
+
+  const rawResponse =
+    extractJson(
+      responseText
+    );
+
+  console.log(
+    "GROQ OUTCOME RAW RESPONSE:",
+    JSON.stringify(
+      rawResponse,
+      null,
+      2
+    )
+  );
+
+  return validateAIOutcomeResult(
+    rawResponse,
+    context
+  );
+}
+
+/* =====================================================
+   GROQ — GENERATE NEXT ROUND EVENTS ONLY
+   ===================================================== */
+
+export async function generateAIHostNextEventsGroq(
+  context: AIHostContext
+): Promise<ValidatedAIEventResponse> {
+  const apiKey = process.env.GROQ_API_KEY;
+
+  if (!apiKey) {
+    throw new Error(
+      "GROQ_API_KEY is not configured."
+    );
+  }
+
+  const groq = new Groq({
+    apiKey,
+  });
+
+  const prompt =
+    buildEventPrompt(
+      context
+    );
+
+  const response =
+    await groq.chat.completions.create({
+      model: "openai/gpt-oss-20b",
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      temperature: 0.8,
+      reasoning_effort: "low",
+      include_reasoning: false,
+      max_completion_tokens: 2048,
+      response_format: {
+        type: "json_object",
+      },
+    });
+
+  const responseText =
+    response.choices[0]?.message?.content;
+
+  if (!responseText) {
+    throw new Error(
+      "Groq returned an empty next-event response."
+    );
+  }
+
+  const rawResponse =
+    extractJson(
+      responseText
+    );
+
+  console.log(
+    "GROQ NEXT EVENTS RAW RESPONSE:",
+    JSON.stringify(
+      rawResponse,
+      null,
+      2
+    )
+  );
+
+  return validateAIEventResult(
+    rawResponse,
+    context
+  );
+}
+
+/* =====================================================
+   GROQ — LEGACY ROUND BATCH
+   =====================================================
+
+   Giữ lại để các file cũ đang import
+   generateAIHostRoundBatch không bị break.
+
+   Kiến trúc mới nên dùng:
+
+   1. generateAIHostOutcomeGroq()
+   2. server apply outcome
+   3. generateAIHostNextEventsGroq()
+
+   Không nên dùng batch cho flow mới vì
+   nextRoundPlayers phải là state SAU khi resolve.
    ===================================================== */
 
 export async function generateAIHostRoundBatch(
@@ -644,15 +1138,22 @@ export async function generateAIHostRoundBatch(
     );
 
   const response =
-  await groq.chat.completions.create({
-    model: "openai/gpt-oss-20b",
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.6,
-    reasoning_effort: "low",
-    include_reasoning: false,
-    max_completion_tokens: 2048,
-    response_format: { type: "json_object" },
-  });
+    await groq.chat.completions.create({
+      model: "openai/gpt-oss-20b",
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      temperature: 0.6,
+      reasoning_effort: "low",
+      include_reasoning: false,
+      max_completion_tokens: 2048,
+      response_format: {
+        type: "json_object",
+      },
+    });
 
   const responseText =
     response.choices[0]?.message?.content;
@@ -664,69 +1165,69 @@ export async function generateAIHostRoundBatch(
   }
 
   const rawResponse =
-  extractJson(
-    responseText
-  ) as {
-    round?: unknown;
-    outcomes?: unknown;
-    nextEvents?: unknown;
-  };
+    extractJson(
+      responseText
+    ) as {
+      round?: unknown;
+      outcomes?: unknown;
+      nextEvents?: unknown;
+    };
 
-console.log(
-  "GROQ ROUND BATCH RAW RESPONSE:",
-  JSON.stringify(
-    rawResponse,
-    null,
-    2
-  )
-);
-
-if (
-  rawResponse.round !==
-  context.round
-) {
-  throw new Error(
-    `AI returned batch round ${String(
-      rawResponse.round
-    )}, expected ${context.round}.`
-  );
-}
-
-if (!rawResponse.outcomes) {
-  throw new Error(
-    "AI round batch is missing top-level 'outcomes'."
-  );
-}
-
-if (!rawResponse.nextEvents) {
-  throw new Error(
-    "AI round batch is missing top-level 'nextEvents'."
-  );
-}
-
-const outcomes =
-  validateAIOutcomeResult(
-    rawResponse.outcomes,
-    {
-      round:
-        context.round,
-
-      players:
-        context.outcomePlayers,
-    }
+  console.log(
+    "GROQ ROUND BATCH RAW RESPONSE:",
+    JSON.stringify(
+      rawResponse,
+      null,
+      2
+    )
   );
 
-const nextEvents =
-  validateAIEventResult(
-    rawResponse.nextEvents,
-    {
-      round:
-        context.round + 1,
+  if (
+    rawResponse.round !==
+    context.round
+  ) {
+    throw new Error(
+      `AI returned batch round ${String(
+        rawResponse.round
+      )}, expected ${context.round}.`
+    );
+  }
 
-      players:
-        context.nextRoundPlayers,
-    }
-  );
+  if (!rawResponse.outcomes) {
+    throw new Error(
+      "AI round batch is missing top-level 'outcomes'."
+    );
+  }
+
+  if (!rawResponse.nextEvents) {
+    throw new Error(
+      "AI round batch is missing top-level 'nextEvents'."
+    );
+  }
+
+  const outcomes =
+    validateAIOutcomeResult(
+      rawResponse.outcomes,
+      {
+        round:
+          context.round,
+
+        players:
+          context.outcomePlayers,
+      }
+    );
+
+  const nextEvents =
+    validateAIEventResult(
+      rawResponse.nextEvents,
+      {
+        round:
+          context.round + 1,
+
+        players:
+          context.nextRoundPlayers,
+      }
+    );
 
   return {
     round:
@@ -738,166 +1239,8 @@ const nextEvents =
   };
 }
 
-function buildOutcomePrompt(
-  context: AIOutcomeContext
-): string {
-  return `
-You are the AI Game Host for a Vietnamese multiplayer survival/travel RPG called "Đường Biên Đêm".
-
-The game is fictional.
-
-You are now RESOLVING player choices.
-
-Each player has already received a specific event and has selected one specific choice.
-
-Your job is to determine the outcome of EACH player's exact event and exact chosen choice.
-
-IMPORTANT RULES:
-
-1. Every player must receive exactly one outcome.
-2. Resolve each player independently.
-3. Use the exact event provided for that player.
-4. Use the exact chosen choice provided for that player.
-5. Do not change the event.
-6. Do not invent a different choice.
-7. Do not generate new choices.
-8. Consider the player's current:
-   - HP
-   - money
-   - location
-   - legal risk
-   - previous choice
-9. Effects are CHANGES, not absolute values.
-10. hp is an integer change.
-11. money is an integer change.
-12. legal_risk is an integer change from -10 to +10.
-13. location should only be returned if the player's location actually changes.
-
-14. TRAVEL RULE — CRITICAL:
-    If the event contains a destination, that destination represents
-    an OPPORTUNITY to travel, NOT an automatic location change.
-
-15. The player must have selected a choice that clearly accepts,
-    pursues, completes, or successfully commits to the travel opportunity
-    before you may return a location effect.
-
-16. If the selected choice refuses, delays, investigates, negotiates,
-    prepares for, or otherwise does NOT actually travel, do NOT return
-    a location effect.
-
-17. If the selected choice results in actual travel:
-    effects.location MUST be exactly the event.destination.
-
-18. NEVER invent a different destination in effects.location.
-
-19. If the event.destination is null, NEVER return effects.location.
-
-20. Do not teleport the player merely because a destination exists.
-
-21. The server will validate the location change after this response.
-
-22. Effects should normally be moderate.
-23. Do not directly modify the database.
-24. Do not invent player IDs.
-25. Use Vietnamese for the outcome message if an outcome message is provided.
-26. The result must correspond specifically to the selected choice.
-27. Different choices should generally produce meaningfully different outcomes.
-28. Do not provide real-world instructions for wrongdoing.
-29. Keep the game suitable for a general audience.
-
-CURRENT ROUND:
-${context.round}
-
-PLAYERS AND THEIR EXACT EVENTS / CHOICES:
-${JSON.stringify(
-  context.players,
-  null,
-  2
-)}
-
-RETURN ONLY VALID JSON.
-
-The JSON must have exactly this structure:
-
-{
-  "round": number,
-  "players": [
-    {
-      "player_id": "UUID",
-      "effects": {
-        "hp": number,
-        "money": number,
-        "location": "string",
-        "legal_risk": number
-      }
-    }
-  ]
-}
-
-The "players" array must contain exactly the same players supplied above.
-
-DO NOT return events.
-DO NOT return choices.
-DO NOT return a different choice.
-
-Only return the effects produced by the exact selected choice.
-`;
-}
-
 /* =====================================================
-   EXTRACT JSON
-   ===================================================== */
-
-function extractJson(
-  text: string
-): unknown {
-  const cleaned = text
-    .trim()
-    .replace(
-      /^```json\s*/i,
-      ""
-    )
-    .replace(
-      /^```\s*/i,
-      ""
-    )
-    .replace(
-      /\s*```$/i,
-      ""
-    )
-    .trim();
-
-  try {
-    return JSON.parse(
-      cleaned
-    );
-  } catch {
-    const firstBrace =
-      cleaned.indexOf("{");
-
-    const lastBrace =
-      cleaned.lastIndexOf("}");
-
-    if (
-      firstBrace === -1 ||
-      lastBrace === -1
-    ) {
-      throw new Error(
-        "Gemini did not return valid JSON."
-      );
-    }
-
-    return JSON.parse(
-      cleaned.slice(
-        firstBrace,
-        lastBrace + 1
-      )
-    );
-  }
-}
-
-/* =====================================================
-   GENERATE PRIVATE EVENTS
+   GEMINI — GENERATE PRIVATE EVENTS
    ===================================================== */
 
 export async function generateAIHostEvents(
@@ -945,17 +1288,14 @@ export async function generateAIHostEvents(
       responseText
     );
 
-  const validated =
-    validateAIEventResult(
-      rawResponse,
-      context
-    );
-
-  return validated;
+  return validateAIEventResult(
+    rawResponse,
+    context
+  );
 }
 
 /* =====================================================
-   GENERATE OUTCOMES
+   GEMINI — GENERATE OUTCOMES
    ===================================================== */
 
 export async function generateAIHostOutcome(
@@ -1003,13 +1343,10 @@ export async function generateAIHostOutcome(
       responseText
     );
 
-  const validated =
-    validateAIOutcomeResult(
-      rawResponse,
-      context
-    );
-
-  return validated;
+  return validateAIOutcomeResult(
+    rawResponse,
+    context
+  );
 }
 
 /* =====================================================
@@ -1036,18 +1373,12 @@ export function validateAIEventResult(
 
   const expectedPlayers: ExpectedPlayer[] =
     context.players.map(
-      (player: AIHostPlayerContext) => ({
+      (
+        player: AIHostPlayerContext
+      ) => ({
         id: player.id,
       })
     );
-
-  /*
-   * host-validation currently expects
-   * the legacy AI response shape.
-   *
-   * Event responses do not contain effects,
-   * so validate player IDs directly here.
-   */
 
   const expectedIds =
     new Set(
@@ -1158,14 +1489,67 @@ export function validateAIOutcomeResult(
 }
 
 /* =====================================================
+   JSON EXTRACTION
+   ===================================================== */
+
+function extractJson(
+  text: string
+): unknown {
+  const cleaned =
+    text
+      .trim()
+      .replace(
+        /^```json\s*/i,
+        ""
+      )
+      .replace(
+        /^```\s*/i,
+        ""
+      )
+      .replace(
+        /\s*```$/i,
+        ""
+      )
+      .trim();
+
+  try {
+    return JSON.parse(
+      cleaned
+    );
+  } catch {
+    const firstBrace =
+      cleaned.indexOf(
+        "{"
+      );
+
+    const lastBrace =
+      cleaned.lastIndexOf(
+        "}"
+      );
+
+    if (
+      firstBrace === -1 ||
+      lastBrace === -1
+    ) {
+      throw new Error(
+        "AI did not return valid JSON."
+      );
+    }
+
+    return JSON.parse(
+      cleaned.slice(
+        firstBrace,
+        lastBrace + 1
+      )
+    );
+  }
+}
+
+/* =====================================================
    LEGACY GENERATE AI HOST RESULT
    =====================================================
 
    Giữ lại để rounds.ts hiện tại vẫn compile.
-   Chưa dùng cho kiến trúc mới.
-
-   Sau khi migrate rounds.ts sang
-   generateAIHostEvents(), có thể xóa.
    ===================================================== */
 
 function buildLegacyPrompt(
@@ -1293,7 +1677,9 @@ export function validateAIHostResult(
 
   const expectedPlayers: ExpectedPlayer[] =
     context.players.map(
-      (player: AIHostPlayerContext) => ({
+      (
+        player: AIHostPlayerContext
+      ) => ({
         id: player.id,
       })
     );
