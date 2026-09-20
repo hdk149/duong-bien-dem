@@ -88,16 +88,34 @@ export default function EndGameOverlay() {
     showEndGame(customEvent.detail);
   }
 
+  // ============================================
+  // NORMAL END GAME EVENT
+  // ============================================
+
   window.addEventListener(
     "duongbien:end-game",
     handleEndGame
   );
 
-  // =====================================================
-  // FORCE END GAME TEST
+  // ============================================
+  // PENDING END GAME
+  //
+  // Nếu GamePage gọi triggerEndGame()
+  // trước khi Overlay mount thì payload vẫn
+  // được giữ lại và xử lý ở đây.
+  // ============================================
+
+  const pending = consumePendingEndGame();
+
+  if (pending) {
+    showEndGame(pending);
+  }
+
+  // ============================================
+  // DEV FORCE END GAME TEST
   //
   // /game/123456?devEndGame=1
-  // =====================================================
+  // ============================================
 
   const params = new URLSearchParams(
     window.location.search
@@ -106,8 +124,10 @@ export default function EndGameOverlay() {
   const forceEndGame =
     params.get(DEV_FORCE_PARAM) === "1";
 
+  let frame: number | null = null;
+
   if (forceEndGame) {
-    const frame = window.requestAnimationFrame(() => {
+    frame = window.requestAnimationFrame(() => {
       showEndGame({
         playerName: "DEV TEST",
         money: 400_000_000,
@@ -118,28 +138,23 @@ export default function EndGameOverlay() {
           "DEV TEST — End Game Overlay đang hoạt động!",
       });
     });
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-
-      window.removeEventListener(
-        "duongbien:end-game",
-        handleEndGame
-      );
-    };
   }
+
+  // ============================================
+  // CLEANUP
+  // ============================================
 
   return () => {
     window.removeEventListener(
       "duongbien:end-game",
       handleEndGame
     );
-  };
-}, [devMessage]);
 
-  if (!visible) {
-    return null;
-  }
+    if (frame !== null) {
+      window.cancelAnimationFrame(frame);
+    }
+  };
+}, [showEndGame, devMessage]);
 
   return (
     <>
@@ -583,16 +598,36 @@ export default function EndGameOverlay() {
    PROGRAMMATIC END-GAME TRIGGER
    ===================================================== */
 
-export function triggerEndGame(
-  detail?: EndGameDetail
-) {
-  if (typeof window === "undefined") {
-    return;
-  }
+let pendingEndGameDetail: EndGameDetail | null = null;
+
+export function triggerEndGame(detail?: EndGameDetail) {
+  if (typeof window === "undefined") return;
+
+  const payload: EndGameDetail = {
+    playerName: detail?.playerName ?? "Người sống sót",
+    money: detail?.money ?? 400_000_000,
+    hp: detail?.hp ?? 100,
+    location: detail?.location ?? "Việt Nam",
+    rounds: detail?.rounds ?? 0,
+    message:
+      detail?.message ??
+      "Chúc mừng! Bạn đã hoàn thành hành trình Đường Biên Đêm.",
+  };
+
+  // QUAN TRỌNG:
+  // Lưu trước khi dispatch để không bao giờ mất event
+  // nếu EndGameOverlay chưa kịp mount.
+  pendingEndGameDetail = payload;
 
   window.dispatchEvent(
     new CustomEvent("duongbien:end-game", {
-      detail,
+      detail: payload,
     })
   );
+}
+
+export function consumePendingEndGame(): EndGameDetail | null {
+  const detail = pendingEndGameDetail;
+  pendingEndGameDetail = null;
+  return detail;
 }
