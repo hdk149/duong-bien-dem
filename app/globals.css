@@ -1,26 +1,570 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ============================================================
+   THEME TOKENS
+   ============================================================ */
+
+/* ============================================================
+   THEME TOKENS
+   ============================================================ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Background */
+  --background: #e8e1d5;
+  --foreground: #292722;
+
+  /* Card / Surface */
+    --card: rgba(250, 247, 241, 0.82);
+  --card-foreground: #292722;
+
+  --border: rgba(70, 65, 55, 0.16);
+
+  --muted: #6f6b63;
+
+  --input: rgba(255, 255, 255, 0.7);
+  --input-foreground: #292722;
+
+  --primary: #c98b3c;
+  --primary-foreground: #fffaf1;
+
+  --secondary: rgba(255, 255, 255, 0.55);
+  --secondary-foreground: #292722;
+
+  /* Status */
+  --danger: #d8796c;
+  --danger-background: rgba(120, 55, 48, 0.28);
+
+  --success: #9eaf70;
+  --success-background: rgba(100, 120, 65, 0.25);
+
+  /* Global radius */
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+
+  /* Global shadows */
+  --shadow-theme: 0 4px 20px rgb(0 0 0 / 0.12);
+  --shadow-theme-lg: 0 10px 40px rgb(0 0 0 / 0.20);
 }
+
+:root.dark {
+  /* Background */
+  --background: #101210;
+  --foreground: #eee9df;
+
+  /* Card / Surface */
+  --card: rgba(29, 31, 29, 0.82);
+  --card-foreground: #eee9df;
+
+  /* Border */
+  --border: rgba(220, 218, 207, 0.18);
+
+  /* Muted text */
+  --muted: #aaa9a2;
+
+  /* Input */
+  --input: rgba(255, 255, 255, 0.08);
+  --input-foreground: #eee9df;
+
+  /* Primary */
+  --primary: #eeb15b;
+  --primary-foreground: #211d17;
+
+  /* Secondary */
+  --secondary: rgba(255, 255, 255, 0.08);
+  --secondary-foreground: #eee9df;
+
+  /* Status */
+  --danger: #c96c61;
+  --danger-background: rgba(100, 45, 40, 0.28);
+
+  --success: #91a563;
+  --success-background: rgba(70, 90, 45, 0.25);
+
+  /* Shadows */
+  --shadow-theme: 0 4px 20px rgb(0 0 0 / 0.25);
+  --shadow-theme-lg: 0 10px 40px rgb(0 0 0 / 0.45);
+}
+
+/* ============================================================
+   TAILWIND THEME
+   ============================================================ */
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+
+  --color-input: var(--input);
+  --color-input-foreground: var(--input-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-danger: var(--danger);
+  --color-danger-background: var(--danger-background);
+
+  --color-success: var(--success);
+  --color-success-background: var(--success-background);
+
+  --font-sans: Arial, Helvetica, sans-serif;
+  --font-mono: monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ============================================================
+   ROOT
+   ============================================================ */
+
+html {
+  min-height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+
+  color-scheme: light;
+
+  scrollbar-width: thin;
+  scrollbar-color: #a3a3a3 var(--background);
+
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+html.light {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
 }
 
 body {
+  margin: 0;
+  min-height: 100vh;
+
   background: var(--background);
   color: var(--foreground);
+
   font-family: Arial, Helvetica, sans-serif;
+
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+/* ============================================================
+   GLOBAL ELEMENTS
+   ============================================================ */
+
+* {
+  border-color: var(--border);
+  box-sizing: border-box;
+}
+
+button,
+a,
+input,
+textarea,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+input,
+textarea,
+select {
+  color: var(--input-foreground);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+}
+
+::selection {
+  background: color-mix(
+    in srgb,
+    var(--foreground) 20%,
+    transparent
+  );
+
+  color: var(--foreground);
+}
+
+/* ============================================================
+   GLOBAL THEME UTILITIES
+   ============================================================ */
+
+.theme-page {
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.theme-card {
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-theme);
+}
+
+.theme-card-lg {
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-theme);
+}
+
+.theme-section {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  border-radius: var(--radius);
+}
+
+.theme-input {
+  background: var(--input);
+  color: var(--input-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.theme-button {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-radius: var(--radius);
+}
+
+.theme-border {
+  border: 1px solid var(--border);
+}
+
+.theme-shadow {
+  box-shadow: var(--shadow-theme);
+}
+
+.theme-shadow-lg {
+  box-shadow: var(--shadow-theme-lg);
+}
+
+.rounded-theme {
+  border-radius: var(--radius);
+}
+
+.rounded-theme-lg {
+  border-radius: var(--radius-lg);
+}
+
+.rounded-theme-xl {
+  border-radius: var(--radius-xl);
+}
+
+/* ============================================================
+   LIGHT THEME — LEGACY TAILWIND COMPATIBILITY
+   ============================================================ */
+
+html.light .bg-black {
+  background-color: var(--background) !important;
+}
+
+html.light .bg-zinc-950 {
+  background-color: var(--background) !important;
+}
+
+html.light .bg-zinc-900 {
+  background-color: var(--card) !important;
+}
+
+html.light .bg-zinc-800 {
+  background-color: var(--secondary) !important;
+}
+
+html.light .bg-zinc-700 {
+  background-color: #e5e5e5 !important;
+}
+
+html.light .bg-zinc-600 {
+  background-color: #d4d4d4 !important;
+}
+
+html.light .bg-white {
+  background-color: var(--primary) !important;
+}
+
+html.light .bg-white\/5 {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 5%,
+    transparent
+  ) !important;
+}
+
+html.light .bg-white\/10 {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 10%,
+    transparent
+  ) !important;
+}
+
+html.light .bg-white\/20 {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 20%,
+    transparent
+  ) !important;
+}
+
+html.light .bg-black\/5 {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 5%,
+    transparent
+  ) !important;
+}
+
+html.light .bg-black\/10 {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 10%,
+    transparent
+  ) !important;
+}
+
+html.light .bg-black\/20 {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 20%,
+    transparent
+  ) !important;
+}
+
+html.light .bg-zinc-950\/80 {
+  background-color: color-mix(
+    in srgb,
+    var(--background) 80%,
+    transparent
+  ) !important;
+}
+
+html.light .bg-zinc-950\/90 {
+  background-color: color-mix(
+    in srgb,
+    var(--background) 90%,
+    transparent
+  ) !important;
+}
+
+html.light .bg-zinc-900\/80 {
+  background-color: color-mix(
+    in srgb,
+    var(--card) 80%,
+    transparent
+  ) !important;
+}
+
+html.light .bg-zinc-900\/90 {
+  background-color: color-mix(
+    in srgb,
+    var(--card) 90%,
+    transparent
+  ) !important;
+}
+
+/* ============================================================
+   LIGHT TEXT
+   ============================================================ */
+
+html.light .text-black {
+  color: var(--primary-foreground) !important;
+}
+
+html.light .text-white {
+  color: var(--foreground) !important;
+}
+
+html.light .text-zinc-100 {
+  color: #262626 !important;
+}
+
+html.light .text-zinc-200 {
+  color: #404040 !important;
+}
+
+html.light .text-zinc-300 {
+  color: #525252 !important;
+}
+
+html.light .text-zinc-400 {
+  color: var(--muted) !important;
+}
+
+html.light .text-zinc-500 {
+  color: var(--muted) !important;
+}
+
+html.light .text-zinc-600 {
+  color: #666666 !important;
+}
+
+html.light .text-zinc-700 {
+  color: #525252 !important;
+}
+
+html.light .text-zinc-800 {
+  color: #404040 !important;
+}
+
+html.light .text-zinc-900 {
+  color: #262626 !important;
+}
+
+/* ============================================================
+   LIGHT BORDER
+   ============================================================ */
+
+html.light .border-zinc-950,
+html.light .border-zinc-900,
+html.light .border-zinc-800 {
+  border-color: var(--border) !important;
+}
+
+html.light .border-zinc-700 {
+  border-color: #d4d4d4 !important;
+}
+
+html.light .border-zinc-600 {
+  border-color: #c4c4c4 !important;
+}
+
+html.light .border-white {
+  border-color: var(--border) !important;
+}
+
+html.light .border-white\/10 {
+  border-color: color-mix(
+    in srgb,
+    var(--foreground) 10%,
+    transparent
+  ) !important;
+}
+
+html.light .border-white\/20 {
+  border-color: color-mix(
+    in srgb,
+    var(--foreground) 20%,
+    transparent
+  ) !important;
+}
+
+/* ============================================================
+   LIGHT HOVER
+   ============================================================ */
+
+html.light .hover\:bg-black:hover {
+  background-color: #262626 !important;
+}
+
+html.light .hover\:bg-zinc-950:hover {
+  background-color: var(--background) !important;
+}
+
+html.light .hover\:bg-zinc-900:hover {
+  background-color: var(--secondary) !important;
+}
+
+html.light .hover\:bg-zinc-800:hover {
+  background-color: #e5e5e5 !important;
+}
+
+html.light .hover\:bg-zinc-700:hover {
+  background-color: #dcdcdc !important;
+}
+
+html.light .hover\:bg-zinc-200:hover {
+  background-color: #e5e5e5 !important;
+}
+
+html.light .hover\:bg-zinc-100:hover {
+  background-color: #f0f0f0 !important;
+}
+
+html.light .hover\:bg-white:hover {
+  background-color: var(--primary) !important;
+}
+
+html.light .hover\:bg-white\/5:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 5%,
+    transparent
+  ) !important;
+}
+
+html.light .hover\:bg-white\/10:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 10%,
+    transparent
+  ) !important;
+}
+
+html.light .hover\:bg-white\/20:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 20%,
+    transparent
+  ) !important;
+}
+
+html.light .hover\:bg-black\/5:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 5%,
+    transparent
+  ) !important;
+}
+
+html.light .hover\:bg-black\/10:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--foreground) 10%,
+    transparent
+  ) !important;
+}
+
+/* ============================================================
+   LIGHT HOVER TEXT
+   ============================================================ */
+
+html.light .hover\:text-white:hover {
+  color: var(--foreground) !important;
+}
+
+html.light .hover\:text-zinc-100:hover {
+  color: #262626 !important;
+}
+
+html.light .hover\:text-zinc-200:hover {
+  color: #404040 !important;
+}
+
+html.light .hover\:text-zinc-300:hover {
+  color: #525252 !important;
+}
+
+html.light .hover\:text-zinc-400:hover,
+html.light .hover\:text-zinc-500:hover {
+  color: var(--muted) !important;
 }
