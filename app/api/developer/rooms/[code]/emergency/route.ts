@@ -1093,10 +1093,24 @@ export async function POST(
         break;
       }
 
-      /*
+            /*
        * ======================================================
        * FORCE END GAME
        * ======================================================
+       *
+       * Flow:
+       *
+       * playing
+       *    ↓
+       * ending
+       *    ↓
+       * frontend shows End Game cinematic
+       *    ↓
+       * /finalize-end
+       *    ↓
+       * finished
+       *
+       * KHÔNG set finished ở đây.
        */
 
       case "force_end_game": {
@@ -1110,117 +1124,222 @@ export async function POST(
           );
         }
 
-        /*
-         * Room finished.
-         */
-
-        const {
-          error: roomFinishError,
-        } = await supabase
-          .from("rooms")
-          .update({
-            status: "finished",
-          })
-          .eq("id", room.id);
-
-        if (roomFinishError) {
-          throw roomFinishError;
+        if (room.status === "ending") {
+          return json(
+            {
+              success: false,
+              error: "Game đang trong quá trình kết thúc.",
+            },
+            409
+          );
         }
 
         /*
-         * Active sessions → finished.
+         * ----------------------------------------------------
+         * LOAD ACTIVE SESSION
+         * ----------------------------------------------------
          */
 
         const {
-          error: sessionFinishError,
+          data: activeSession,
+          error: activeSessionError,
         } = await supabase
           .from("game_sessions")
-          .update({
-            status: "finished",
-            phase: "finished",
-          })
+          .select(`
+            id,
+            round,
+            phase,
+            current_event_id,
+            session_number
+          `)
           .eq("room_id", room.id)
-          .eq("status", "active");
-
-        if (sessionFinishError) {
-          throw sessionFinishError;
-        }
-
-        /*
-         * game_states → finished.
-         */
-
-        const {
-          data: finishedSession,
-        } = await supabase
-          .from("game_sessions")
-          .select("id, round, current_event_id")
-          .eq("room_id", room.id)
+          .eq("status", "active")
           .order("session_number", {
             ascending: false,
           })
           .limit(1)
           .maybeSingle();
 
-        if (finishedSession) {
+        if (activeSessionError) {
+          throw new Error(
+            `Không thể tải active game session: ${activeSessionError.message}`
+          );
+        }
+
+        /*
+         * ----------------------------------------------------
+         * LẤY PLAYER ĐỂ TẠO END-GAME PAYLOAD
+         * ----------------------------------------------------
+         *
+         * Host cũng là player.
+         * Spectator không được tính.
+         */
+
+        const {
+          data: players,
+          error: playersError,
+        } = await supabase
+          .from("room_players")
+          .select(`
+            id,
+            player_name,
+            hp,
+            money,
+            location,
+            role,
+            moderation_status
+          `)
+          .eq("room_id", room.id)
+          .in("role", ["host", "player"])
+          .eq("moderation_status", "active")
+          .order("created_at", {
+            ascending: true,
+          });
+
+        if (playersError) {
+          throw new Error(
+            `Không thể tải players: ${playersError.message}`
+          );
+        }
+
+        /*
+         * ----------------------------------------------------
+         * END GAME PAYLOAD
+         * ----------------------------------------------------
+         *
+         * Mỗi client sẽ tự lấy currentPlayer của mình,
+         * nên payload này chủ yếu lưu metadata cho trạng thái
+         * ending và fallback.
+         */
+
+        const endGamePayload = {
+          reason: "developer_force_end",
+          triggered_at: new Date().toISOString(),
+          round: activeSession
+            ? Number(activeSession.round)
+            : 0,
+          message:
+            "Game đã được kết thúc bởi Developer.",
+          players: (players ?? []).map((player) => ({
+            id: player.id,
+            player_name: player.player_name,
+            hp: player.hp,
+            money: player.money,
+            location: player.location,
+          })),
+        };
+
+        /*
+         * ----------------------------------------------------
+         * SAVE ENDING PAYLOAD
+         * ----------------------------------------------------
+         *
+         * Lưu trong rooms.rules để không cần thêm column mới.
+         */
+
+        const currentRules =
+          isJsonObject(room.rules)
+            ? room.rules
+            : {};
+
+        const updatedRules = {
+          ...currentRules,
+          emergency_end_game: true,
+          emergency_end_game_reason:
+            "developer_force_end",
+          emergency_end_game_at:
+            endGamePayload.triggered_at,
+          end_game_payload: endGamePayload,
+        };
+
+        /*
+         * ----------------------------------------------------
+         * ROOM → ENDING
+         * ----------------------------------------------------
+         */
+
+        const {
+          error: roomEndingError,
+        } = await supabase
+          .from("rooms")
+          .update({
+            status: "ending",
+            rules: updatedRules,
+          })
+          .eq("id", room.id)
+          .neq("status", "finished");
+
+        if (roomEndingError) {
+          throw new Error(
+            `Không thể chuyển room sang ending: ${roomEndingError.message}`
+          );
+        }
+
+        /*
+         * ----------------------------------------------------
+         * SESSION → ENDING
+         * ----------------------------------------------------
+         *
+         * Không dùng getActiveSession() nữa vì session sắp
+         * chuyển status.
+         */
+
+        if (activeSession) {
           const {
-            error: stateError,
+            error: sessionEndingError,
+          } = await supabase
+            .from("game_sessions")
+            .update({
+              status: "ending",
+              phase: "ending",
+            })
+            .eq("id", activeSession.id)
+            .eq("status", "active");
+
+          if (sessionEndingError) {
+            throw new Error(
+              `Không thể chuyển game session sang ending: ${sessionEndingError.message}`
+            );
+          }
+
+          /*
+           * --------------------------------------------------
+           * GAME STATE → ENDING
+           * --------------------------------------------------
+           */
+
+          const {
+            error: stateEndingError,
           } = await supabase
             .from("game_states")
             .update({
-              round: Number(
-                finishedSession.round
-              ),
-              phase: "finished",
+              round: Number(activeSession.round),
+              phase: "ending",
               current_event_id:
-                finishedSession.current_event_id ??
-                null,
+                activeSession.current_event_id ?? null,
               updated_at:
                 new Date().toISOString(),
             })
             .eq(
               "session_id",
-              finishedSession.id
+              activeSession.id
             );
 
-          if (stateError) {
-            throw stateError;
+          if (stateEndingError) {
+            throw new Error(
+              `Không thể chuyển game state sang ending: ${stateEndingError.message}`
+            );
           }
         }
 
-        newStatus = "finished";
+                newStatus = "ending";
 
         message =
-          `Game ${roomCode} đã bị force end.`;
+          `Game ${roomCode} đã chuyển sang trạng thái ending. Client sẽ chạy End Game cinematic trước khi finalize.`;
 
         break;
       }
     }
-
-    /*
-     * ========================================================
-     * LOG
-     * ========================================================
-     */
-
-    console.log(
-      `[DEVELOPER EMERGENCY] room=${roomCode} action=${emergencyAction} previous=${previousStatus} new=${newStatus ?? "unchanged"}`
-    );
-
-    /*
-     * ========================================================
-     * RESPONSE
-     * ========================================================
-     */
-
-    return json({
-      success: true,
-      roomCode,
-      action: emergencyAction,
-      previousStatus,
-      newStatus,
-      message,
-    });
   } catch (error) {
     console.error(
       "[DEVELOPER EMERGENCY ERROR]",
