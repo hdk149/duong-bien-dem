@@ -81,74 +81,61 @@ export default function EndGameOverlay() {
   }
 
   useEffect(() => {
-    // =====================================================
-    // GAME END EVENT
-    // =====================================================
+  function handleEndGame(event: Event) {
+    const customEvent =
+      event as CustomEvent<EndGameDetail>;
 
-    function handleEndGame(event: Event) {
-      const customEvent =
-        event as CustomEvent<EndGameDetail>;
+    showEndGame(customEvent.detail);
+  }
 
-      showEndGame(customEvent.detail);
-    }
+  window.addEventListener(
+    "duongbien:end-game",
+    handleEndGame
+  );
 
-    window.addEventListener(
-      "duongbien:end-game",
-      handleEndGame
-    );
+  // =====================================================
+  // FORCE END GAME TEST
+  //
+  // /game/123456?devEndGame=1
+  // =====================================================
 
-    // =====================================================
-    // DEV FORCE END GAME
-    //
-    // http://localhost:3000/?devEndGame=1
-    //
-    // Chỉ bật trong development.
-    // =====================================================
+  const params = new URLSearchParams(
+    window.location.search
+  );
 
-    const isDevelopment =
-      process.env.NODE_ENV !== "production";
+  const forceEndGame =
+    params.get(DEV_FORCE_PARAM) === "1";
 
-    if (isDevelopment) {
-      const params = new URLSearchParams(
-        window.location.search
-      );
-
-      const forceEndGame =
-        params.get(DEV_FORCE_PARAM) === "1";
-
-      if (forceEndGame) {
-        // Dùng requestAnimationFrame để chắc chắn
-        // component đã mount hoàn toàn trước khi hiện.
-        const frame = window.requestAnimationFrame(() => {
-          showEndGame({
-            playerName: "DEV TEST",
-            money: 400_000_000,
-            hp: 100,
-            location: "Đà Lạt",
-            rounds: 12,
-            message:
-              "DEV TEST — End Game Overlay đang hoạt động!",
-          });
-        });
-
-        return () => {
-          window.cancelAnimationFrame(frame);
-
-          window.removeEventListener(
-            "duongbien:end-game",
-            handleEndGame
-          );
-        };
-      }
-    }
+  if (forceEndGame) {
+    const frame = window.requestAnimationFrame(() => {
+      showEndGame({
+        playerName: "DEV TEST",
+        money: 400_000_000,
+        hp: 100,
+        location: "Đà Lạt",
+        rounds: 12,
+        message:
+          "DEV TEST — End Game Overlay đang hoạt động!",
+      });
+    });
 
     return () => {
+      window.cancelAnimationFrame(frame);
+
       window.removeEventListener(
         "duongbien:end-game",
         handleEndGame
       );
     };
-  }, [devMessage]);
+  }
+
+  return () => {
+    window.removeEventListener(
+      "duongbien:end-game",
+      handleEndGame
+    );
+  };
+}, [devMessage]);
 
   if (!visible) {
     return null;
