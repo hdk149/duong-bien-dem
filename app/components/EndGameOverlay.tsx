@@ -1,62 +1,244 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
-type EndGameDetail = {
+/*
+ * ============================================================
+ * TYPES
+ * ============================================================
+ */
+
+export type EndGamePlayer = {
   playerName?: string;
-  money?: number;
+  player_name?: string;
+  money?: number | string;
   hp?: number;
   location?: string;
   rounds?: number;
-  message?: string;
+  role?: string;
 };
 
-type ConfettiPiece = {
-  id: number;
-  left: number;
-  delay: number;
-  duration: number;
-  rotation: number;
-  size: number;
-  drift: number;
-  shape: "rect" | "circle";
+export type EndGameDetail = {
+  forced?: boolean;
+  reason?: string;
+  message?: string;
+
+  playerName?: string;
+  money?: number | string;
+  hp?: number;
+  location?: string;
+  rounds?: number;
+
+  players?: EndGamePlayer[];
+
+  /*
+   * Một số payload server có thể dùng timestamp
+   * hoặc triggered_at.
+   */
+  timestamp?: string;
+  triggered_at?: string;
 };
+
+type EndGameOverlayProps = {
+  visible?: boolean;
+  forced?: boolean;
+  message?: string;
+  playerName?: string;
+  money?: number | string;
+  hp?: number;
+  location?: string;
+  rounds?: number;
+};
+
+/*
+ * ============================================================
+ * CONSTANTS
+ * ============================================================
+ */
+
+const END_GAME_EVENT = "duongbien:end-game";
 
 const DEV_FORCE_PARAM = "devEndGame";
 
-function formatMoney(value: number) {
-  return new Intl.NumberFormat("vi-VN").format(
-    Math.max(0, Math.round(value))
+/*
+ * ============================================================
+ * CONTENT
+ * ============================================================
+ */
+
+const NORMAL_WIN_CONTENT = {
+  eyebrow: "ĐƯỜNG BIÊN ĐÊM",
+  title: "HÀNH TRÌNH HOÀN TẤT",
+  subtitle:
+    "Bạn đã đạt mục tiêu tài sản và hoàn thành hành trình!",
+  statLabel: "TÀI SẢN CUỐI CÙNG",
+  status: "",
+};
+
+const FORCED_END_CONTENT = {
+  eyebrow: "DEVELOPER FORCE END",
+  title: "TRẬN ĐẤU KẾT THÚC",
+  subtitle:
+    "Trận đấu đã được kết thúc bởi Developer.",
+  statLabel: "TRẠNG THÁI",
+  status: "FORCED",
+};
+
+/*
+ * ============================================================
+ * PENDING END GAME
+ * ============================================================
+ *
+ * Nếu GamePage gọi triggerEndGame() trước khi
+ * EndGameOverlay mount thì payload vẫn được giữ lại.
+ */
+
+let pendingEndGameDetail: EndGameDetail | null = null;
+
+/*
+ * ============================================================
+ * HELPERS
+ * ============================================================
+ */
+
+function formatMoney(
+  value: number | string | undefined
+) {
+  const number =
+    typeof value === "number"
+      ? value
+      : Number(value);
+
+  if (!Number.isFinite(number)) {
+    return "0đ";
+  }
+
+  return `${new Intl.NumberFormat(
+    "vi-VN"
+  ).format(Math.round(number))}đ`;
+}
+
+/*
+ * ============================================================
+ * SHARED TRIGGER
+ * ============================================================
+ */
+
+export function triggerEndGame(
+  detail?: EndGameDetail
+) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const payload: EndGameDetail = {
+    ...detail,
+
+    playerName:
+      detail?.playerName ??
+      "Người sống sót",
+
+    money:
+      detail?.money ??
+      400_000_000,
+
+    hp:
+      detail?.hp ??
+      100,
+
+    location:
+      detail?.location ??
+      "Việt Nam",
+
+    rounds:
+      detail?.rounds ??
+      0,
+
+    message:
+      detail?.message ??
+      "Chúc mừng! Bạn đã hoàn thành hành trình Đường Biên Đêm.",
+  };
+
+  /*
+   * QUAN TRỌNG:
+   *
+   * Lưu trước khi dispatch để tránh trường hợp
+   * Overlay chưa mount kịp và event bị mất.
+   */
+  pendingEndGameDetail = payload;
+
+  window.dispatchEvent(
+    new CustomEvent<EndGameDetail>(
+      END_GAME_EVENT,
+      {
+        detail: payload,
+      }
+    )
   );
 }
 
-function createConfetti(count: number): ConfettiPiece[] {
-  return Array.from({ length: count }, (_, index) => ({
-    id: index,
-    left: Math.random() * 100,
-    delay: Math.random() * 2.2,
-    duration: 3.2 + Math.random() * 2.4,
-    rotation: Math.random() * 360,
-    size: 6 + Math.random() * 8,
-    drift: -140 + Math.random() * 280,
-    shape: Math.random() > 0.25 ? "rect" : "circle",
-  }));
+/*
+ * ============================================================
+ * CONSUME PENDING EVENT
+ * ============================================================
+ */
+
+export function consumePendingEndGame():
+  | EndGameDetail
+  | null {
+  const detail =
+    pendingEndGameDetail;
+
+  pendingEndGameDetail = null;
+
+  return detail;
 }
 
-const DEFAULT_DETAIL: EndGameDetail = {
-  playerName: "Người sống sót",
-  money: 400_000_000,
-  hp: 100,
-  location: "Việt Nam",
-  rounds: 0,
-};
+/*
+ * ============================================================
+ * COMPONENT
+ * ============================================================
+ */
 
-export default function EndGameOverlay() {
-  const [visible, setVisible] = useState(false);
-  const [detail, setDetail] =
-    useState<EndGameDetail>(DEFAULT_DETAIL);
-  const [confetti, setConfetti] = useState<ConfettiPiece[]>([]);
-  const [burstKey, setBurstKey] = useState(0);
+export default function EndGameOverlay({
+  visible: controlledVisible,
+  forced: controlledForced,
+  message: controlledMessage,
+  playerName: controlledPlayerName,
+  money: controlledMoney,
+  hp: controlledHp,
+  location: controlledLocation,
+  rounds: controlledRounds,
+}: EndGameOverlayProps) {
+  const router = useRouter();
+
+  /*
+   * ----------------------------------------------------------
+   * INTERNAL EVENT STATE
+   * ----------------------------------------------------------
+   */
+
+  const [
+    eventVisible,
+    setEventVisible,
+  ] = useState(false);
+
+  const [
+    eventDetail,
+    setEventDetail,
+  ] = useState<EndGameDetail>({});
+
+  const [
+    burstKey,
+    setBurstKey,
+  ] = useState(0);
+
+  /*
+   * ----------------------------------------------------------
+   * DEV MESSAGE
+   * ----------------------------------------------------------
+   */
 
   const devMessage = useMemo(
     () =>
@@ -64,263 +246,337 @@ export default function EndGameOverlay() {
     []
   );
 
-  function showEndGame(incoming?: EndGameDetail) {
-    setDetail({
-      ...DEFAULT_DETAIL,
-      ...incoming,
-      message: incoming?.message ?? devMessage,
-    });
+  /*
+   * ----------------------------------------------------------
+   * EFFECTIVE DATA
+   * ----------------------------------------------------------
+   */
 
-    setConfetti(createConfetti(150));
-    setBurstKey((value) => value + 1);
-    setVisible(true);
-  }
+  const effectiveVisible =
+    controlledVisible !== undefined
+      ? controlledVisible
+      : eventVisible;
 
-  function closeOverlay() {
-    setVisible(false);
-  }
+  const effectiveForced =
+    controlledForced ??
+    Boolean(eventDetail.forced);
+
+  const content =
+    effectiveForced
+      ? FORCED_END_CONTENT
+      : NORMAL_WIN_CONTENT;
+
+  const effectiveMessage =
+    controlledMessage ??
+    eventDetail.message ??
+    content.subtitle ??
+    devMessage;
+
+  const effectivePlayerName =
+    controlledPlayerName ??
+    eventDetail.playerName ??
+    "Người chơi";
+
+  const effectiveMoney =
+    controlledMoney ??
+    eventDetail.money ??
+    400_000_000;
+
+  const effectiveHp =
+    controlledHp ??
+    eventDetail.hp ??
+    100;
+
+  const effectiveLocation =
+    controlledLocation ??
+    eventDetail.location ??
+    "Việt Nam";
+
+  const effectiveRounds =
+    controlledRounds ??
+    eventDetail.rounds ??
+    0;
+
+  /*
+   * ----------------------------------------------------------
+   * CONFETTI
+   * ----------------------------------------------------------
+   */
+
+  const confetti = useMemo(() => {
+    return Array.from(
+      { length: 120 },
+      (_, index) => ({
+        id: index,
+
+        left:
+          `${Math.random() * 100}%`,
+
+        delay:
+          `${Math.random() * 1.8}s`,
+
+        duration:
+          `${2.8 + Math.random() * 2.8}s`,
+
+        rotation:
+          `${Math.floor(
+            Math.random() * 360
+          )}deg`,
+
+        size:
+          `${
+            6 +
+            Math.floor(
+              Math.random() * 7
+            )
+          }px`,
+      })
+    );
+  }, [burstKey]);
+
+  /*
+   * ==========================================================
+   * END GAME EVENT LISTENER
+   * ==========================================================
+   */
 
   useEffect(() => {
-  function handleEndGame(event: Event) {
-    const customEvent =
-      event as CustomEvent<EndGameDetail>;
+    if (
+      typeof window ===
+      "undefined"
+    ) {
+      return;
+    }
 
-    showEndGame(customEvent.detail);
-  }
+    function handleEndGame(
+      event: Event
+    ) {
+      const customEvent =
+        event as CustomEvent<EndGameDetail>;
 
-  // ============================================
-  // NORMAL END GAME EVENT
-  // ============================================
+      const nextDetail =
+        customEvent.detail ?? {};
 
-  window.addEventListener(
-    "duongbien:end-game",
-    handleEndGame
-  );
+      setEventDetail(
+        nextDetail
+      );
 
-  // ============================================
-  // PENDING END GAME
-  //
-  // Nếu GamePage gọi triggerEndGame()
-  // trước khi Overlay mount thì payload vẫn
-  // được giữ lại và xử lý ở đây.
-  // ============================================
+      setEventVisible(true);
 
-  const pending = consumePendingEndGame();
+      setBurstKey(
+        (value) => value + 1
+      );
+    }
 
-  if (pending) {
-    showEndGame(pending);
-  }
-
-  // ============================================
-  // DEV FORCE END GAME TEST
-  //
-  // /game/123456?devEndGame=1
-  // ============================================
-
-  const params = new URLSearchParams(
-    window.location.search
-  );
-
-  const forceEndGame =
-    params.get(DEV_FORCE_PARAM) === "1";
-
-  let frame: number | null = null;
-
-  if (forceEndGame) {
-    frame = window.requestAnimationFrame(() => {
-      showEndGame({
-        playerName: "DEV TEST",
-        money: 400_000_000,
-        hp: 100,
-        location: "Đà Lạt",
-        rounds: 12,
-        message:
-          "DEV TEST — End Game Overlay đang hoạt động!",
-      });
-    });
-  }
-
-  // ============================================
-  // CLEANUP
-  // ============================================
-
-  return () => {
-    window.removeEventListener(
-      "duongbien:end-game",
+    window.addEventListener(
+      END_GAME_EVENT,
       handleEndGame
     );
 
-    if (frame !== null) {
-      window.cancelAnimationFrame(frame);
+    /*
+     * --------------------------------------------------------
+     * PENDING END GAME
+     * --------------------------------------------------------
+     */
+
+    const pending =
+      consumePendingEndGame();
+
+    if (pending) {
+      setEventDetail(pending);
+      setEventVisible(true);
+
+      setBurstKey(
+        (value) => value + 1
+      );
     }
-  };
-}, [showEndGame, devMessage]);
+
+    /*
+     * --------------------------------------------------------
+     * DEV FORCE END GAME TEST
+     *
+     * /game/123456?devEndGame=1
+     * --------------------------------------------------------
+     */
+
+    const params =
+      new URLSearchParams(
+        window.location.search
+      );
+
+    const forceEndGame =
+      params.get(
+        DEV_FORCE_PARAM
+      ) === "1";
+
+    let frame:
+      | number
+      | null = null;
+
+    if (forceEndGame) {
+      frame =
+        window.requestAnimationFrame(
+          () => {
+            const devPayload: EndGameDetail =
+              {
+                forced: true,
+
+                reason:
+                  "developer_test",
+
+                playerName:
+                  "DEV TEST",
+
+                money:
+                  400_000_000,
+
+                hp: 100,
+
+                location:
+                  "Đà Lạt",
+
+                rounds: 12,
+
+                message:
+                  "DEV TEST — End Game Overlay đang hoạt động!",
+              };
+
+            setEventDetail(
+              devPayload
+            );
+
+            setEventVisible(
+              true
+            );
+
+            setBurstKey(
+              (value) =>
+                value + 1
+            );
+          }
+        );
+    }
+
+    /*
+     * --------------------------------------------------------
+     * CLEANUP
+     * --------------------------------------------------------
+     */
+
+    return () => {
+      window.removeEventListener(
+        END_GAME_EVENT,
+        handleEndGame
+      );
+
+      if (
+        frame !== null
+      ) {
+        window.cancelAnimationFrame(
+          frame
+        );
+      }
+    };
+  }, []);
+
+  /*
+   * ==========================================================
+   * BACK HOME
+   * ==========================================================
+   */
+
+  function backHome() {
+    setEventVisible(false);
+
+    router.push("/");
+  }
+
+  /*
+   * ==========================================================
+   * DO NOT RENDER
+   * ==========================================================
+   */
+
+  if (!effectiveVisible) {
+    return null;
+  }
+
+  /*
+   * ==========================================================
+   * OVERLAY
+   * ==========================================================
+   */
 
   return (
     <>
       <style jsx global>{`
-        @keyframes dbd-confetti-fall {
+        @keyframes endgame-pop {
           0% {
-            transform: translate3d(0, -12vh, 0) rotate(0deg);
-            opacity: 1;
-          }
-
-          85% {
-            opacity: 1;
+            opacity: 0;
+            transform:
+              scale(0.86)
+              translateY(24px);
           }
 
           100% {
+            opacity: 1;
             transform:
-              translate3d(var(--dbd-drift), 115vh, 0)
-              rotate(900deg);
-            opacity: 0;
+              scale(1)
+              translateY(0);
           }
         }
 
-        @keyframes dbd-side-burst-left {
+        @keyframes endgame-confetti {
           0% {
-            transform: translate(0, 0) rotate(0deg);
+            opacity: 0;
+            transform:
+              translate3d(
+                0,
+                -30px,
+                0
+              )
+              rotate(0deg);
+          }
+
+          10% {
             opacity: 1;
           }
 
           100% {
+            opacity: 0;
             transform:
-              translate(42vw, -76vh)
+              translate3d(
+                0,
+                110vh,
+                0
+              )
               rotate(720deg);
-            opacity: 0;
           }
         }
 
-        @keyframes dbd-side-burst-right {
-          0% {
-            transform: translate(0, 0) rotate(0deg);
-            opacity: 1;
-          }
-
-          100% {
-            transform:
-              translate(-42vw, -76vh)
-              rotate(720deg);
-            opacity: 0;
-          }
-        }
-
-        @keyframes dbd-victory-pop {
-          0% {
-            transform: scale(.35) rotate(-5deg);
-            opacity: 0;
-          }
-
-          55% {
-            transform: scale(1.08) rotate(1deg);
-            opacity: 1;
-          }
-
-          100% {
-            transform: scale(1) rotate(0deg);
-            opacity: 1;
-          }
-        }
-
-        @keyframes dbd-glow {
+        @keyframes endgame-glow {
           0%,
           100% {
-            opacity: .35;
-            transform: scale(.9);
+            opacity: 0.25;
+            transform: scale(0.92);
           }
 
           50% {
-            opacity: .8;
-            transform: scale(1.12);
+            opacity: 0.55;
+            transform: scale(1.08);
           }
         }
 
-        @keyframes dbd-fade-up {
-          from {
-            opacity: 0;
-            transform: translateY(22px);
+        @media (
+          prefers-reduced-motion: reduce
+        ) {
+          [aria-label="Game finished"],
+          [aria-label="Developer ended game"] {
+            animation: none !important;
           }
 
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-
-        .dbd-endgame-piece {
-          position: absolute;
-          top: -5vh;
-          pointer-events: none;
-          animation:
-            dbd-confetti-fall
-            var(--dbd-duration)
-            var(--dbd-delay)
-            linear
-            forwards;
-          will-change: transform, opacity;
-        }
-
-        .dbd-left-piece {
-          position: absolute;
-          left: 0;
-          bottom: 18%;
-          width: 9px;
-          height: 15px;
-          pointer-events: none;
-          animation:
-            dbd-side-burst-left
-            2.6s
-            var(--dbd-delay)
-            cubic-bezier(.15,.75,.25,1)
-            forwards;
-        }
-
-        .dbd-right-piece {
-          position: absolute;
-          right: 0;
-          bottom: 18%;
-          width: 9px;
-          height: 15px;
-          pointer-events: none;
-          animation:
-            dbd-side-burst-right
-            2.6s
-            var(--dbd-delay)
-            cubic-bezier(.15,.75,.25,1)
-            forwards;
-        }
-
-        .dbd-endgame-card {
-          animation:
-            dbd-victory-pop
-            .8s
-            cubic-bezier(.16,1,.3,1)
-            both;
-        }
-
-        .dbd-endgame-glow {
-          animation:
-            dbd-glow
-            2.2s
-            ease-in-out
-            infinite;
-        }
-
-        .dbd-endgame-stat {
-          animation:
-            dbd-fade-up
-            .65s
-            cubic-bezier(.16,1,.3,1)
-            both;
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-          .dbd-endgame-piece,
-          .dbd-left-piece,
-          .dbd-right-piece,
-          .dbd-endgame-card,
-          .dbd-endgame-glow,
-          .dbd-endgame-stat {
+          [aria-label="Game finished"] span,
+          [aria-label="Developer ended game"] span {
             animation: none !important;
           }
         }
@@ -331,303 +587,237 @@ export default function EndGameOverlay() {
         className="fixed inset-0 z-[99999] overflow-hidden"
         role="dialog"
         aria-modal="true"
-        aria-label="Màn hình chiến thắng"
-        style={{
-          background:
-            "radial-gradient(circle at center, rgba(255,255,255,.98) 0%, rgba(255,248,225,.97) 28%, rgba(16,16,16,.98) 100%)",
-        }}
+        aria-label={
+          effectiveForced
+            ? "Developer ended game"
+            : "Game finished"
+        }
       >
-        {/* Glow */}
+        {/* BACKDROP */}
+
+        <div className="absolute inset-0 bg-black/85 backdrop-blur-md" />
+
+        {/* AMBIENT GLOW */}
 
         <div
-          className="dbd-endgame-glow absolute left-1/2 top-1/2 h-[420px] w-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
+          className="absolute left-1/2 top-1/2 h-[420px] w-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
           style={{
-            background: "rgba(255,190,60,.42)",
+            background:
+              "rgba(214,189,114,0.18)",
+            animation:
+              "endgame-glow 2.4s ease-in-out infinite",
           }}
         />
 
-        {/* Top confetti */}
+        {/* CONFETTI */}
 
         <div
-          className="pointer-events-none absolute inset-0"
+          className="pointer-events-none absolute inset-0 overflow-hidden"
           aria-hidden="true"
         >
-          {confetti.map((piece) => (
-            <span
-              key={piece.id}
-              className="dbd-endgame-piece"
-              style={{
-                left: `${piece.left}%`,
-                width: `${piece.size}px`,
-                height:
-                  piece.shape === "circle"
-                    ? `${piece.size}px`
-                    : `${piece.size * 1.65}px`,
-                borderRadius:
-                  piece.shape === "circle"
-                    ? "999px"
-                    : "2px",
-                background:
-                  piece.id % 5 === 0
-                    ? "#facc15"
-                    : piece.id % 5 === 1
-                      ? "#ef4444"
-                      : piece.id % 5 === 2
-                        ? "#22c55e"
-                        : piece.id % 5 === 3
-                          ? "#3b82f6"
-                          : "#ec4899",
-                transform:
-                  `rotate(${piece.rotation}deg)`,
-                ["--dbd-delay" as string]:
-                  `${piece.delay}s`,
-                ["--dbd-duration" as string]:
-                  `${piece.duration}s`,
-                ["--dbd-drift" as string]:
-                  `${piece.drift}px`,
-              }}
-            />
-          ))}
-        </div>
-
-        {/* Left cannon */}
-
-        <div
-          className="pointer-events-none absolute bottom-[16%] left-[-4px] hidden sm:block"
-          aria-hidden="true"
-        >
-          {Array.from({ length: 32 }).map(
-            (_, index) => (
+          {confetti.map(
+            (piece) => (
               <span
-                key={`left-${index}`}
-                className="dbd-left-piece"
+                key={piece.id}
+                className="absolute top-[-30px] block"
                 style={{
-                  ["--dbd-delay" as string]:
-                    `${index * 0.018}s`,
-                  background:
-                    index % 4 === 0
-                      ? "#facc15"
-                      : index % 4 === 1
-                        ? "#ef4444"
-                        : index % 4 === 2
-                          ? "#22c55e"
-                          : "#3b82f6",
+                  left:
+                    piece.left,
+
+                  width:
+                    piece.size,
+
+                  height:
+                    piece.size,
+
+                  animation:
+                    "endgame-confetti linear forwards",
+
+                  animationDelay:
+                    piece.delay,
+
+                  animationDuration:
+                    piece.duration,
+
                   transform:
-                    `rotate(${index * 17}deg)`,
+                    `rotate(${piece.rotation})`,
+
+                  background:
+                    piece.id % 5 ===
+                    0
+                      ? "#d6bd72"
+                      : piece.id % 5 ===
+                          1
+                        ? "#b9a16a"
+                        : piece.id % 5 ===
+                            2
+                          ? "#eee7d9"
+                          : piece.id % 5 ===
+                              3
+                            ? "#8c9363"
+                            : "#a85f55",
                 }}
               />
             )
           )}
         </div>
 
-        {/* Right cannon */}
+        {/* LEFT CANNON */}
 
         <div
-          className="pointer-events-none absolute bottom-[16%] right-[-4px] hidden sm:block"
+          className="pointer-events-none absolute left-[-25px] top-1/2 h-32 w-32 -translate-y-1/2"
           aria-hidden="true"
         >
-          {Array.from({ length: 32 }).map(
-            (_, index) => (
-              <span
-                key={`right-${index}`}
-                className="dbd-right-piece"
-                style={{
-                  ["--dbd-delay" as string]:
-                    `${index * 0.018}s`,
-                  background:
-                    index % 4 === 0
-                      ? "#facc15"
-                      : index % 4 === 1
-                        ? "#ef4444"
-                        : index % 4 === 2
-                          ? "#22c55e"
-                          : "#3b82f6",
-                  transform:
-                    `rotate(${index * 17}deg)`,
-                }}
-              />
-            )
-          )}
+          <div className="absolute left-1/2 top-1/2 h-3 w-3 rounded-full bg-[#eee7d9] shadow-[0_0_30px_10px_rgba(238,231,217,0.35)]" />
         </div>
 
-        {/* Main card */}
+        {/* RIGHT CANNON */}
 
-        <div className="relative flex min-h-full items-center justify-center px-4 py-8">
-          <div className="dbd-endgame-card relative w-full max-w-2xl">
-            <div className="rounded-[32px] border-4 border-black bg-[#f7edcf] px-5 py-7 text-center shadow-[10px_12px_0_rgba(0,0,0,.85)] sm:px-10 sm:py-10">
-              <div
-                className="mb-3 text-6xl sm:text-7xl"
-                aria-hidden="true"
-              >
-                🏆
+        <div
+          className="pointer-events-none absolute right-[-25px] top-1/2 h-32 w-32 -translate-y-1/2"
+          aria-hidden="true"
+        >
+          <div className="absolute right-1/2 top-1/2 h-3 w-3 rounded-full bg-[#eee7d9] shadow-[0_0_30px_10px_rgba(238,231,217,0.35)]" />
+        </div>
+
+        {/* MAIN */}
+
+        <div className="relative flex min-h-[100dvh] items-center justify-center px-4 py-8">
+          <div
+            className="relative w-full max-w-lg"
+            style={{
+              animation:
+                "endgame-pop 500ms cubic-bezier(.16,1,.3,1)",
+            }}
+          >
+            {/* TOP DECORATION */}
+
+            <div className="mb-[-28px] text-center">
+              <div className="relative z-10 mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-[#d6bd72]/50 bg-[#1a1815] text-5xl shadow-[0_0_60px_rgba(214,189,114,0.25)]">
+                {effectiveForced
+                  ? "⚡"
+                  : "🏆"}
               </div>
+            </div>
 
-              <div className="mb-2 text-sm font-black uppercase tracking-[.3em] text-neutral-600">
-                ĐƯỜNG BIÊN ĐÊM
-              </div>
+            {/* CARD */}
 
-              <h1 className="text-4xl font-black uppercase leading-none tracking-tight text-black sm:text-6xl">
-                CHIẾN THẮNG!
-              </h1>
+            <div className="overflow-hidden rounded-[32px] border border-[#4b463d] bg-[#171613] text-[#eee7d9] shadow-[0_30px_100px_rgba(0,0,0,0.6)]">
+              {/* HEADER */}
 
-              <p className="mt-3 text-base font-bold text-neutral-700 sm:text-lg">
-                Bạn đã chạm mốc tài sản
-              </p>
-
-              {/* Money */}
-
-              <div className="my-5 rounded-2xl border-4 border-black bg-black px-4 py-5 shadow-[5px_5px_0_rgba(0,0,0,.25)]">
-                <div className="text-xs font-black uppercase tracking-[.25em] text-yellow-300">
-                  TÀI SẢN CUỐI CÙNG
-                </div>
-
-                <div className="mt-1 break-words text-4xl font-black text-white sm:text-6xl">
-                  {formatMoney(
-                    detail.money ??
-                      400_000_000
-                  )}
-                  ₫
-                </div>
-              </div>
-
-              <div className="text-2xl font-black text-black sm:text-3xl">
-                {detail.playerName}
-              </div>
-
-              {/* Stats */}
-
-              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div
-                  className="dbd-endgame-stat rounded-xl border-2 border-black bg-white p-3"
-                  style={{
-                    animationDelay: ".15s",
-                  }}
-                >
-                  <div className="text-xs font-bold text-neutral-500">
-                    HP
-                  </div>
-
-                  <div className="mt-1 text-xl font-black">
-                    {detail.hp ?? 100}
-                  </div>
-                </div>
-
-                <div
-                  className="dbd-endgame-stat rounded-xl border-2 border-black bg-white p-3"
-                  style={{
-                    animationDelay: ".25s",
-                  }}
-                >
-                  <div className="text-xs font-bold text-neutral-500">
-                    ĐỊA ĐIỂM
-                  </div>
-
-                  <div className="mt-1 truncate text-sm font-black">
-                    {detail.location ?? "Việt Nam"}
-                  </div>
-                </div>
-
-                <div
-                  className="dbd-endgame-stat rounded-xl border-2 border-black bg-white p-3"
-                  style={{
-                    animationDelay: ".35s",
-                  }}
-                >
-                  <div className="text-xs font-bold text-neutral-500">
-                    VÒNG
-                  </div>
-
-                  <div className="mt-1 text-xl font-black">
-                    {detail.rounds ?? 0}
-                  </div>
-                </div>
-
-                <div
-                  className="dbd-endgame-stat rounded-xl border-2 border-black bg-white p-3"
-                  style={{
-                    animationDelay: ".45s",
-                  }}
-                >
-                  <div className="text-xs font-bold text-neutral-500">
-                    TRẠNG THÁI
-                  </div>
-
-                  <div className="mt-1 text-sm font-black text-green-700">
-                    SURVIVED
-                  </div>
-                </div>
-              </div>
-
-              {/* Dev message */}
-
-              <div
-                className="dbd-endgame-stat mt-6 rounded-2xl border-2 border-black bg-[#fff8df] px-4 py-4 text-left"
-                style={{
-                  animationDelay: ".55s",
-                }}
-              >
-                <div className="mb-1 text-xs font-black uppercase tracking-widest text-neutral-500">
-                  💬 Lời nhắn từ Dev
-                </div>
-
-                <p className="text-sm font-semibold leading-6 text-neutral-800 sm:text-base">
-                  {detail.message ?? devMessage}
+              <div className="px-6 pb-6 pt-16 text-center">
+                <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[#a49678]">
+                  {content.eyebrow}
                 </p>
 
-                <div className="mt-3 text-right text-xs font-black text-neutral-500">
-                  — Hoàng Đăng Khoa
+                <h1 className="mt-3 text-3xl font-black tracking-tight sm:text-4xl">
+                  {content.title}
+                </h1>
+
+                <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-[#aaa397]">
+                  {effectiveMessage}
+                </p>
+              </div>
+
+              {/* MONEY / STATUS */}
+
+              <div className="border-y border-[#37342e] bg-[#1d1b18] px-6 py-7 text-center">
+                <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#8e8678]">
+                  {content.statLabel}
+                </p>
+
+                <p className="mt-2 text-4xl font-black tracking-tight text-[#d6bd72] sm:text-5xl">
+                  {effectiveForced
+                    ? content.status
+                    : formatMoney(
+                        effectiveMoney
+                      )}
+                </p>
+              </div>
+
+              {/* PLAYER */}
+
+              <div className="grid grid-cols-2 gap-px border-b border-[#37342e] bg-[#37342e]">
+                <div className="bg-[#171613] px-4 py-5 text-center">
+                  <p className="text-[10px] uppercase tracking-wider text-[#777166]">
+                    Người chơi
+                  </p>
+
+                  <p className="mt-1 truncate text-sm font-bold">
+                    {
+                      effectivePlayerName
+                    }
+                  </p>
+                </div>
+
+                <div className="bg-[#171613] px-4 py-5 text-center">
+                  <p className="text-[10px] uppercase tracking-wider text-[#777166]">
+                    HP
+                  </p>
+
+                  <p className="mt-1 text-sm font-bold">
+                    ❤️{" "}
+                    {effectiveHp}
+                  </p>
+                </div>
+
+                <div className="bg-[#171613] px-4 py-5 text-center">
+                  <p className="text-[10px] uppercase tracking-wider text-[#777166]">
+                    Vị trí
+                  </p>
+
+                  <p className="mt-1 truncate text-sm font-bold">
+                    📍{" "}
+                    {
+                      effectiveLocation
+                    }
+                  </p>
+                </div>
+
+                <div className="bg-[#171613] px-4 py-5 text-center">
+                  <p className="text-[10px] uppercase tracking-wider text-[#777166]">
+                    Số vòng
+                  </p>
+
+                  <p className="mt-1 text-sm font-bold">
+                    {
+                      effectiveRounds
+                    }
+                  </p>
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={closeOverlay}
-                className="mt-7 min-h-12 w-full rounded-xl border-2 border-black bg-black px-6 py-3 text-base font-black text-white shadow-[4px_4px_0_rgba(0,0,0,.25)] transition-transform active:translate-x-[2px] active:translate-y-[2px]"
-              >
-                VỀ LẠI GAME
-              </button>
+              {/* FORCE END MESSAGE */}
+
+              {effectiveForced && (
+                <div className="mx-5 mt-5 rounded-2xl border border-[#5a4b32] bg-[#252019] px-4 py-4 text-center">
+                  <p className="text-xs leading-5 text-[#c7bdab]">
+                    Đây là lần kết thúc
+                    cưỡng chế từ
+                    Developer. Không có
+                    kết quả thắng 400
+                    triệu được ghi nhận.
+                  </p>
+                </div>
+              )}
+
+              {/* BUTTON */}
+
+              <div className="p-5">
+                <button
+                  type="button"
+                  onClick={
+                    backHome
+                  }
+                  className="min-h-14 w-full rounded-2xl bg-[#eee7d9] px-5 text-sm font-black tracking-wide text-[#171613] transition hover:bg-white active:scale-[0.985]"
+                >
+                  BACK HOME
+                </button>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </>
   );
-}
-
-/* =====================================================
-   PROGRAMMATIC END-GAME TRIGGER
-   ===================================================== */
-
-let pendingEndGameDetail: EndGameDetail | null = null;
-
-export function triggerEndGame(detail?: EndGameDetail) {
-  if (typeof window === "undefined") return;
-
-  const payload: EndGameDetail = {
-    playerName: detail?.playerName ?? "Người sống sót",
-    money: detail?.money ?? 400_000_000,
-    hp: detail?.hp ?? 100,
-    location: detail?.location ?? "Việt Nam",
-    rounds: detail?.rounds ?? 0,
-    message:
-      detail?.message ??
-      "Chúc mừng! Bạn đã hoàn thành hành trình Đường Biên Đêm.",
-  };
-
-  // QUAN TRỌNG:
-  // Lưu trước khi dispatch để không bao giờ mất event
-  // nếu EndGameOverlay chưa kịp mount.
-  pendingEndGameDetail = payload;
-
-  window.dispatchEvent(
-    new CustomEvent("duongbien:end-game", {
-      detail: payload,
-    })
-  );
-}
-
-export function consumePendingEndGame(): EndGameDetail | null {
-  const detail = pendingEndGameDetail;
-  pendingEndGameDetail = null;
-  return detail;
 }

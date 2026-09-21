@@ -56,11 +56,7 @@ export default function GlobalUI() {
 
             dark:hover:bg-white/10
           "
-          aria-label={
-            isVietnamese
-              ? "Cài đặt"
-              : "Settings"
-          }
+          aria-label={isVietnamese ? "Cài đặt" : "Settings"}
         >
           ⚙️
         </Link>

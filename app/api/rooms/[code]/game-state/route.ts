@@ -65,11 +65,23 @@ type SharedGameEvent = {
   session_id: string;
 };
 
+type JsonObject = Record<string, unknown>;
+
 type RouteContext = {
   params: Promise<{
     code: string;
   }>;
 };
+
+function isJsonObject(
+  value: unknown
+): value is JsonObject {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}
 
 function normalizeChoices(
   value: unknown
@@ -237,7 +249,34 @@ export async function GET(
     }
 
     /* =====================================================
+       END GAME PAYLOAD
+       ===================================================== */
+
+    const roomRules =
+      isJsonObject(room.rules)
+        ? room.rules
+        : {};
+
+    const endGamePayload =
+      isJsonObject(
+        roomRules.end_game_payload
+      )
+        ? roomRules.end_game_payload
+        : null;
+
+    const developerEndGame =
+      endGamePayload !== null;
+
+    /* =====================================================
        3. ROOM MUST BE PLAYING
+       
+       IMPORTANT:
+       force_end_game KHÔNG đổi rooms.status sang
+       "finished" ngay lập tức.
+
+       Nó chỉ ghi end_game_payload vào rules để
+       frontend vẫn có thể gọi game-state và nhận
+       cinematic payload.
        ===================================================== */
 
     if (
@@ -250,6 +289,17 @@ export async function GET(
             "Trận đấu chưa bắt đầu.",
           roomStatus:
             room.status,
+
+          /*
+           * Giữ payload để client có thể biết
+           * developer đã trigger end game nếu
+           * room status sau này thay đổi.
+           */
+          endGame:
+            developerEndGame,
+
+          endGamePayload:
+            endGamePayload,
         },
         {
           status: 409,
@@ -687,14 +737,6 @@ export async function GET(
 
     /* =====================================================
        6. LOAD PRIVATE PLAYER EVENT
-       
-       PRIMARY SOURCE:
-       player_round_events
-
-       FALLBACK:
-       game_events
-
-       Spectator does not receive a player's private event.
        ===================================================== */
 
     let playerEvent:
@@ -845,26 +887,10 @@ export async function GET(
       playerEvent ??
       sharedEvent;
 
-    /*
-     * effectiveEventId:
-     *
-     * Private event:
-     *   player_round_events.id
-     *
-     * Legacy fallback:
-     *   game_events.id
-     */
-
     const effectiveEventId =
       playerEvent?.id ??
       sharedEvent?.id ??
       null;
-
-    /*
-     * sourceGameEventId:
-     *
-     * Useful for the next choose/resolve migration.
-     */
 
     const sourceGameEventId =
       playerEvent?.source_event_id ??
@@ -873,13 +899,6 @@ export async function GET(
 
     /* =====================================================
        8. CURRENT CHOICE
-       
-       IMPORTANT:
-       Current migration still supports the old
-       player_choices table using source game event ID.
-
-       Later choose/route.ts will be changed to use
-       player_round_events.id directly.
        ===================================================== */
 
     if (
@@ -924,12 +943,6 @@ export async function GET(
 
     /* =====================================================
        9. COUNT ACTIVE PLAYER VOTES
-       
-       During migration this still counts votes from
-       player_choices against the shared source event.
-       
-       This will be changed when choose/route.ts is
-       migrated to player_round_events.
        ===================================================== */
 
     if (
@@ -1051,10 +1064,6 @@ export async function GET(
             id:
               finalEvent.id,
 
-            /*
-             * This is true when event came from
-             * player_round_events.
-             */
             isPrivate:
               Boolean(
                 playerEvent
@@ -1123,13 +1132,6 @@ export async function GET(
             is_connected:
               player.is_connected,
           };
-
-          /*
-           * Spectator receives public location data.
-           *
-           * Player receives the same public player list.
-           * No other player's private event is exposed.
-           */
 
           return {
             ...basePlayer,
@@ -1255,26 +1257,62 @@ export async function GET(
           code:
             room.code,
 
-          status:
-            room.status,
-
           hostName:
+            room.host_name,
+
+          host_name:
             room.host_name,
 
           maxPlayers:
             room.max_players,
 
+          max_players:
+            room.max_players,
+
+          status:
+            room.status,
+
           startingMoney:
+            room.starting_money,
+
+          starting_money:
             room.starting_money,
 
           goalMoney:
             room.goal_money,
 
+          goal_money:
+            room.goal_money,
+
           startingLocation:
-            room.starting_location,
+            room.starting_location ??
+            "TP. Hồ Chí Minh",
+
+          starting_location:
+            room.starting_location ??
+            "TP. Hồ Chí Minh",
 
           diceSystem:
             room.dice_system,
+
+          dice_system:
+            room.dice_system,
+
+          /* =============================================
+             END GAME
+             ============================================= */
+
+          endGame:
+            developerEndGame,
+
+          end_game:
+            developerEndGame,
+
+          endGamePayload:
+            endGamePayload,
+
+          end_game_payload:
+            endGamePayload,
         },
 
         gameState: {
@@ -1510,6 +1548,22 @@ export async function GET(
 
           dice_system:
             room.dice_system,
+
+          /* =============================================
+             END GAME
+             ============================================= */
+
+          endGame:
+            developerEndGame,
+
+          end_game:
+            developerEndGame,
+
+          endGamePayload:
+            endGamePayload,
+
+          end_game_payload:
+            endGamePayload,
         },
 
         /* =================================================
@@ -1632,17 +1686,9 @@ export async function GET(
         event:
           safeEvent,
 
-        /*
-         * Explicit field for the new architecture.
-         *
-         * Frontend can eventually switch from:
-         *
-         * data.event
-         *
-         * to:
-         *
-         * data.playerEvent
-         */
+        /* =================================================
+           NEW PRIVATE EVENT FORMAT
+           ================================================= */
 
         playerEvent:
           playerEvent
