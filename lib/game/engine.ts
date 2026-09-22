@@ -92,7 +92,9 @@ const ROUND_1_EVENT: EventTemplate = {
  * Sau này thay bằng Gemini.
  */
 
-function getFallbackEvent(round: number): EventTemplate {
+function getFallbackEvent(
+  round: number
+): EventTemplate {
   return {
     title: `Sự kiện Round ${round}`,
 
@@ -131,6 +133,21 @@ function getFallbackEvent(round: number): EventTemplate {
 
 /*
  * ============================================================
+ * SHOP ROUND HELPER
+ * ============================================================
+ */
+
+function isShopRound(
+  round: number
+): boolean {
+  return (
+    round > 0 &&
+    round % 7 === 0
+  );
+}
+
+/*
+ * ============================================================
  * SYNC GAME SESSION
  * ============================================================
  *
@@ -151,29 +168,30 @@ async function syncSession(
   round: number,
   phase: string
 ) {
-  const { data, error } = await supabase
-    .from("game_sessions")
-    .update({
-      round,
-      phase,
-      current_round: round,
-      current_phase: phase,
-      current_event_id: eventId,
-    })
-    .eq("id", sessionId)
-    .select(
-      `
-        id,
-        room_id,
-        status,
+  const { data, error } =
+    await supabase
+      .from("game_sessions")
+      .update({
         round,
         phase,
-        current_round,
-        current_phase,
-        current_event_id
-      `
-    )
-    .maybeSingle();
+        current_round: round,
+        current_phase: phase,
+        current_event_id: eventId,
+      })
+      .eq("id", sessionId)
+      .select(
+        `
+          id,
+          room_id,
+          status,
+          round,
+          phase,
+          current_round,
+          current_phase,
+          current_event_id
+        `
+      )
+      .maybeSingle();
 
   if (error) {
     return {
@@ -210,29 +228,34 @@ async function syncGameState(
   round: number,
   phase: string
 ) {
-  const { data, error } = await supabase
-    .from("game_states")
-    .update({
-      round,
-      phase,
-      current_event_id: eventId,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("session_id", sessionId)
-    .select(
-      `
-        id,
-        room_id,
-        session_id,
+  const { data, error } =
+    await supabase
+      .from("game_states")
+      .update({
         round,
         phase,
-        current_event_id,
-        started_at,
-        updated_at,
-        created_at
-      `
-    )
-    .maybeSingle();
+        current_event_id: eventId,
+        updated_at:
+          new Date().toISOString(),
+      })
+      .eq(
+        "session_id",
+        sessionId
+      )
+      .select(
+        `
+          id,
+          room_id,
+          session_id,
+          round,
+          phase,
+          current_event_id,
+          started_at,
+          updated_at,
+          created_at
+        `
+      )
+      .maybeSingle();
 
   if (error) {
     return {
@@ -270,15 +293,17 @@ async function getEventById(
   event: GameEventRow | null;
   error: unknown;
 }> {
-  const { data, error } = await supabase
-    .from("game_events")
-    .select("*")
-    .eq("id", eventId)
-    .eq("session_id", sessionId)
-    .maybeSingle();
+  const { data, error } =
+    await supabase
+      .from("game_events")
+      .select("*")
+      .eq("id", eventId)
+      .eq("session_id", sessionId)
+      .maybeSingle();
 
   return {
-    event: data as GameEventRow | null,
+    event:
+      data as GameEventRow | null,
     error,
   };
 }
@@ -297,19 +322,30 @@ async function getEventByRound(
   event: GameEventRow | null;
   error: unknown;
 }> {
-  const { data, error } = await supabase
-    .from("game_events")
-    .select("*")
-    .eq("session_id", sessionId)
-    .eq("round", round)
-    .order("created_at", {
-      ascending: false,
-    })
-    .limit(1)
-    .maybeSingle();
+  const { data, error } =
+    await supabase
+      .from("game_events")
+      .select("*")
+      .eq(
+        "session_id",
+        sessionId
+      )
+      .eq(
+        "round",
+        round
+      )
+      .order(
+        "created_at",
+        {
+          ascending: false,
+        }
+      )
+      .limit(1)
+      .maybeSingle();
 
   return {
-    event: data as GameEventRow | null,
+    event:
+      data as GameEventRow | null,
     error,
   };
 }
@@ -350,7 +386,8 @@ async function syncExistingEvent(
 
     return {
       success: false,
-      error: "Không thể đồng bộ game state.",
+      error:
+        "Không thể đồng bộ game state.",
     };
   }
 
@@ -378,7 +415,8 @@ async function syncExistingEvent(
 
     return {
       success: false,
-      error: "Không thể đồng bộ game session.",
+      error:
+        "Không thể đồng bộ game session.",
     };
   }
 
@@ -427,7 +465,10 @@ export async function generateRoundEvent(
         current_event_id
       `
     )
-    .eq("id", sessionId)
+    .eq(
+      "id",
+      sessionId
+    )
     .maybeSingle();
 
   if (sessionError) {
@@ -438,14 +479,16 @@ export async function generateRoundEvent(
 
     return {
       success: false,
-      error: "Không thể tải game session.",
+      error:
+        "Không thể tải game session.",
     };
   }
 
   if (!session) {
     return {
       success: false,
-      error: "Game session không tồn tại.",
+      error:
+        "Game session không tồn tại.",
     };
   }
 
@@ -455,10 +498,14 @@ export async function generateRoundEvent(
    * ==========================================================
    */
 
-  if (session.status !== "active") {
+  if (
+    session.status !==
+    "active"
+  ) {
     return {
       success: false,
-      error: "Game session không còn hoạt động.",
+      error:
+        "Game session không còn hoạt động.",
     };
   }
 
@@ -466,6 +513,9 @@ export async function generateRoundEvent(
    * ==========================================================
    * 3. GET ROUND
    * ==========================================================
+   *
+   * Ưu tiên round chính.
+   * Nếu round null thì fallback current_round.
    */
 
   const rawRound =
@@ -473,37 +523,357 @@ export async function generateRoundEvent(
     session.current_round ??
     1;
 
-  const round = Number(rawRound);
+  const round =
+    Number(rawRound);
 
-  if (!Number.isInteger(round) || round < 1) {
+  if (
+    !Number.isInteger(round) ||
+    round < 1
+  ) {
     return {
       success: false,
-      error: "Round không hợp lệ.",
+      error:
+        "Round không hợp lệ.",
     };
   }
 
   /*
    * ==========================================================
-   * 4. CURRENT EVENT
+   * 4. SHOP PHASE
+   * ==========================================================
+   *
+   * SHOP:
+   *
+   * 7
+   * 14
+   * 21
+   * 28
+   * ...
+   *
+   * Đây là điểm QUAN TRỌNG:
+   *
+   * Shop được kiểm tra TRƯỚC:
+   *
+   * - current_event_id
+   * - existing event
+   * - generate event
+   *
+   * Vì vậy round Shop tuyệt đối không
+   * được rơi xuống pipeline tạo event.
+   */
+
+  const shopRound =
+    isShopRound(round);
+
+  console.log(
+    "ENGINE - ROUND CHECK:",
+    {
+      sessionId:
+        session.id,
+
+      round,
+
+      sessionPhase:
+        session.phase,
+
+      currentPhase:
+        session.current_phase,
+
+      currentEventId:
+        session.current_event_id,
+
+      shopRound,
+    }
+  );
+
+  /*
+   * ----------------------------------------------------------
+   * 4A. ALREADY IN SHOP
+   * ----------------------------------------------------------
+   *
+   * Nếu engine được gọi nhiều lần:
+   *
+   * KHÔNG update game_state.
+   *
+   * Điều này cực kỳ quan trọng vì
+   * game_states.updated_at chính là
+   * server timestamp mở Shop.
+   *
+   * Nếu update lại mỗi request thì timer
+   * 75 giây sẽ bị reset.
+   */
+
+  if (
+    shopRound &&
+    (
+      session.phase ===
+        "shop" ||
+      session.current_phase ===
+        "shop"
+    )
+  ) {
+    /*
+     * Trường hợp một field đã là shop
+     * nhưng field còn lại chưa đồng bộ,
+     * sửa lại cả hai mà KHÔNG đụng
+     * game_states.updated_at nếu cả hai
+     * đã đúng.
+     */
+
+    if (
+      session.phase ===
+        "shop" &&
+      session.current_phase ===
+        "shop"
+    ) {
+      console.log(
+        "ENGINE - SHOP ALREADY OPEN:",
+        {
+          sessionId:
+            session.id,
+          round,
+        }
+      );
+
+      return {
+        success: true,
+      };
+    }
+
+    /*
+     * Một trong hai field đang là shop,
+     * field còn lại chưa đúng.
+     *
+     * Đồng bộ session trước.
+     *
+     * Lưu ý:
+     * Không gọi syncGameState ở đây nếu
+     * game state đã là shop, nhằm tránh
+     * reset updated_at.
+     */
+
+    const {
+      error: partialShopSyncError,
+    } = await syncSession(
+      supabase,
+      session.id,
+      null,
+      round,
+      "shop"
+    );
+
+    if (
+      partialShopSyncError
+    ) {
+      console.error(
+        "ENGINE - PARTIAL SHOP SESSION SYNC ERROR:",
+        partialShopSyncError
+      );
+
+      return {
+        success: false,
+        error:
+          "Không thể đồng bộ Shop Phase.",
+      };
+    }
+
+    console.log(
+      "ENGINE - SHOP SESSION RESYNCED:",
+      {
+        sessionId:
+          session.id,
+        round,
+      }
+    );
+
+    return {
+      success: true,
+    };
+  }
+
+  /*
+   * ----------------------------------------------------------
+   * 4B. ENTER SHOP
+   * ----------------------------------------------------------
+   *
+   * Nếu round là Shop nhưng session
+   * chưa ở phase shop:
+   *
+   * → chuyển session sang shop
+   * → clear event
+   * → chuyển game_state sang shop
+   *
+   * game_states.updated_at chỉ được ghi
+   * tại đây, tức thời điểm Shop thực sự mở.
+   */
+
+  if (shopRound) {
+    const previousPhase =
+      session.phase ??
+      session.current_phase ??
+      "choosing";
+
+    const previousEventId =
+      session.current_event_id ??
+      null;
+
+    console.log(
+      "ENGINE - ENTERING SHOP:",
+      {
+        sessionId:
+          session.id,
+
+        round,
+
+        previousPhase,
+
+        previousEventId,
+      }
+    );
+
+    /*
+     * --------------------------------------------------------
+     * 4B.1 GAME SESSION
+     * --------------------------------------------------------
+     *
+     * Clear current_event_id vì Shop
+     * không có event.
+     */
+
+    const {
+      error:
+        shopSessionError,
+    } = await syncSession(
+      supabase,
+      session.id,
+      null,
+      round,
+      "shop"
+    );
+
+    if (
+      shopSessionError
+    ) {
+      console.error(
+        "ENGINE - ENTER SHOP SESSION ERROR:",
+        shopSessionError
+      );
+
+      return {
+        success: false,
+        error:
+          "Không thể mở Shop Phase.",
+      };
+    }
+
+    /*
+     * --------------------------------------------------------
+     * 4B.2 GAME STATE
+     * --------------------------------------------------------
+     *
+     * updated_at = server timestamp
+     * tại thời điểm Shop mở.
+     */
+
+    const {
+      error:
+        shopStateError,
+    } = await syncGameState(
+      supabase,
+      session.id,
+      null,
+      round,
+      "shop"
+    );
+
+    if (
+      shopStateError
+    ) {
+      console.error(
+        "ENGINE - ENTER SHOP STATE ERROR:",
+        shopStateError
+      );
+
+      /*
+       * Rollback session.
+       */
+
+      const {
+        error:
+          rollbackSessionError,
+      } = await syncSession(
+        supabase,
+        session.id,
+        previousEventId,
+        round,
+        previousPhase
+      );
+
+      if (
+        rollbackSessionError
+      ) {
+        console.error(
+          "ENGINE - SHOP SESSION ROLLBACK ERROR:",
+          rollbackSessionError
+        );
+      }
+
+      return {
+        success: false,
+        error:
+          "Không thể cập nhật game state cho Shop.",
+      };
+    }
+
+    console.log(
+      "ENGINE - SHOP PHASE OPENED:",
+      {
+        sessionId:
+          session.id,
+
+        round,
+
+        phase:
+          "shop",
+
+        durationSeconds:
+          75,
+      }
+    );
+
+    return {
+      success: true,
+    };
+  }
+
+  /*
+   * ==========================================================
+   * 5. CURRENT EVENT
    * ==========================================================
    *
    * Nếu session đã có current_event_id:
    *
    * - event tồn tại → dùng lại
-   * - event không tồn tại → clear reference rồi tạo tiếp
+   * - event không tồn tại → clear reference
+   *   rồi tạo tiếp
    */
 
-  if (session.current_event_id) {
+  if (
+    session.current_event_id
+  ) {
     const {
       event: currentEvent,
-      error: currentEventError,
+      error:
+        currentEventError,
     } = await getEventById(
       supabase,
       session.id,
       session.current_event_id
     );
 
-    if (currentEventError) {
+    if (
+      currentEventError
+    ) {
       console.error(
         "ENGINE - CURRENT EVENT ERROR:",
         currentEventError
@@ -511,7 +881,8 @@ export async function generateRoundEvent(
 
       return {
         success: false,
-        error: "Không thể tải event hiện tại.",
+        error:
+          "Không thể tải event hiện tại.",
       };
     }
 
@@ -531,11 +902,13 @@ export async function generateRoundEvent(
     /*
      * Event không còn tồn tại.
      *
-     * Clear reference trước khi tạo event mới.
+     * Clear reference trước khi tạo
+     * event mới.
      */
 
     const {
-      error: clearSessionError,
+      error:
+        clearSessionError,
     } = await syncSession(
       supabase,
       session.id,
@@ -544,7 +917,9 @@ export async function generateRoundEvent(
       "generating_event"
     );
 
-    if (clearSessionError) {
+    if (
+      clearSessionError
+    ) {
       console.error(
         "ENGINE - CLEAR SESSION EVENT ERROR:",
         clearSessionError
@@ -552,12 +927,14 @@ export async function generateRoundEvent(
 
       return {
         success: false,
-        error: "Không thể reset event hiện tại.",
+        error:
+          "Không thể reset event hiện tại.",
       };
     }
 
     const {
-      error: clearStateError,
+      error:
+        clearStateError,
     } = await syncGameState(
       supabase,
       session.id,
@@ -566,7 +943,9 @@ export async function generateRoundEvent(
       "generating_event"
     );
 
-    if (clearStateError) {
+    if (
+      clearStateError
+    ) {
       console.error(
         "ENGINE - CLEAR STATE EVENT ERROR:",
         clearStateError
@@ -574,29 +953,34 @@ export async function generateRoundEvent(
 
       return {
         success: false,
-        error: "Không thể reset game state.",
+        error:
+          "Không thể reset game state.",
       };
     }
   }
 
   /*
    * ==========================================================
-   * 5. CHECK EXISTING EVENT
+   * 6. CHECK EXISTING EVENT
    * ==========================================================
    *
-   * Tránh tạo event trùng nếu engine được gọi lại.
+   * Tránh tạo event trùng nếu engine
+   * được gọi lại.
    */
 
   const {
     event: existingEvent,
-    error: existingEventError,
+    error:
+      existingEventError,
   } = await getEventByRound(
     supabase,
     session.id,
     round
   );
 
-  if (existingEventError) {
+  if (
+    existingEventError
+  ) {
     console.error(
       "ENGINE - EXISTING EVENT ERROR:",
       existingEventError
@@ -604,13 +988,14 @@ export async function generateRoundEvent(
 
     return {
       success: false,
-      error: "Không thể kiểm tra event hiện tại.",
+      error:
+        "Không thể kiểm tra event hiện tại.",
     };
   }
 
   /*
    * ==========================================================
-   * 6. EVENT ALREADY EXISTS
+   * 7. EVENT ALREADY EXISTS
    * ==========================================================
    */
 
@@ -625,7 +1010,7 @@ export async function generateRoundEvent(
 
   /*
    * ==========================================================
-   * 7. GENERATE EVENT TEMPLATE
+   * 8. GENERATE EVENT TEMPLATE
    * ==========================================================
    */
 
@@ -636,15 +1021,8 @@ export async function generateRoundEvent(
 
   /*
    * ==========================================================
-   * 8. INSERT EVENT
+   * 9. INSERT EVENT
    * ==========================================================
-   *
-   * Lưu ý:
-   *
-   * Nếu sau này thêm UNIQUE(session_id, round),
-   * request thứ hai có thể nhận lỗi 23505.
-   *
-   * Khi đó ta load lại event vừa được request khác tạo.
    */
 
   const {
@@ -653,11 +1031,16 @@ export async function generateRoundEvent(
   } = await supabase
     .from("game_events")
     .insert({
-      room_id: session.room_id,
-      session_id: session.id,
+      room_id:
+        session.room_id,
+
+      session_id:
+        session.id,
+
       round,
 
-      title: eventData.title,
+      title:
+        eventData.title,
 
       description:
         eventData.description,
@@ -668,14 +1051,15 @@ export async function generateRoundEvent(
       choices:
         eventData.choices,
 
-      result: null,
+      result:
+        null,
     })
     .select("*")
     .single();
 
   /*
    * ==========================================================
-   * 8A. DUPLICATE EVENT
+   * 9A. DUPLICATE EVENT
    * ==========================================================
    */
 
@@ -683,7 +1067,7 @@ export async function generateRoundEvent(
     /*
      * PostgreSQL unique violation.
      *
-     * Nếu DB đã có:
+     * Nếu DB có:
      *
      * UNIQUE(session_id, round)
      *
@@ -691,17 +1075,24 @@ export async function generateRoundEvent(
      * cùng tạo một event.
      */
 
-    if (eventError.code === "23505") {
+    if (
+      eventError.code ===
+      "23505"
+    ) {
       const {
-        event: duplicateEvent,
-        error: duplicateEventError,
+        event:
+          duplicateEvent,
+        error:
+          duplicateEventError,
       } = await getEventByRound(
         supabase,
         session.id,
         round
       );
 
-      if (duplicateEventError) {
+      if (
+        duplicateEventError
+      ) {
         console.error(
           "ENGINE - DUPLICATE EVENT LOAD ERROR:",
           duplicateEventError
@@ -737,27 +1128,31 @@ export async function generateRoundEvent(
 
     return {
       success: false,
-      error: "Không thể tạo game event.",
+      error:
+        "Không thể tạo game event.",
     };
   }
 
   if (!event) {
     return {
       success: false,
-      error: "Game event không được tạo.",
+      error:
+        "Game event không được tạo.",
     };
   }
 
-  const createdEvent = event as GameEventRow;
+  const createdEvent =
+    event as GameEventRow;
 
   /*
    * ==========================================================
-   * 9. UPDATE GAME STATE
+   * 10. UPDATE GAME STATE
    * ==========================================================
    */
 
   const {
-    error: gameStateError,
+    error:
+      gameStateError,
   } = await syncGameState(
     supabase,
     session.id,
@@ -766,7 +1161,9 @@ export async function generateRoundEvent(
     "choosing"
   );
 
-  if (gameStateError) {
+  if (
+    gameStateError
+  ) {
     console.error(
       "ENGINE - UPDATE GAME STATE ERROR:",
       gameStateError
@@ -777,13 +1174,19 @@ export async function generateRoundEvent(
      */
 
     const {
-      error: rollbackEventError,
+      error:
+        rollbackEventError,
     } = await supabase
       .from("game_events")
       .delete()
-      .eq("id", createdEvent.id);
+      .eq(
+        "id",
+        createdEvent.id
+      );
 
-    if (rollbackEventError) {
+    if (
+      rollbackEventError
+    ) {
       console.error(
         "ENGINE - ROLLBACK EVENT ERROR:",
         rollbackEventError
@@ -799,12 +1202,13 @@ export async function generateRoundEvent(
 
   /*
    * ==========================================================
-   * 10. UPDATE GAME SESSION
+   * 11. UPDATE GAME SESSION
    * ==========================================================
    */
 
   const {
-    error: sessionUpdateError,
+    error:
+      sessionUpdateError,
   } = await syncSession(
     supabase,
     session.id,
@@ -813,7 +1217,9 @@ export async function generateRoundEvent(
     "choosing"
   );
 
-  if (sessionUpdateError) {
+  if (
+    sessionUpdateError
+  ) {
     console.error(
       "ENGINE - UPDATE SESSION ERROR:",
       sessionUpdateError
@@ -824,7 +1230,8 @@ export async function generateRoundEvent(
      */
 
     const {
-      error: rollbackStateError,
+      error:
+        rollbackStateError,
     } = await syncGameState(
       supabase,
       session.id,
@@ -833,7 +1240,9 @@ export async function generateRoundEvent(
       "generating_event"
     );
 
-    if (rollbackStateError) {
+    if (
+      rollbackStateError
+    ) {
       console.error(
         "ENGINE - ROLLBACK STATE ERROR:",
         rollbackStateError
@@ -845,13 +1254,19 @@ export async function generateRoundEvent(
      */
 
     const {
-      error: rollbackEventError,
+      error:
+        rollbackEventError,
     } = await supabase
       .from("game_events")
       .delete()
-      .eq("id", createdEvent.id);
+      .eq(
+        "id",
+        createdEvent.id
+      );
 
-    if (rollbackEventError) {
+    if (
+      rollbackEventError
+    ) {
       console.error(
         "ENGINE - ROLLBACK EVENT ERROR:",
         rollbackEventError
@@ -867,12 +1282,29 @@ export async function generateRoundEvent(
 
   /*
    * ==========================================================
-   * 11. SUCCESS
+   * 12. SUCCESS
    * ==========================================================
    */
 
+  console.log(
+    "ENGINE - NORMAL ROUND EVENT READY:",
+    {
+      sessionId:
+        session.id,
+
+      round,
+
+      phase:
+        "choosing",
+
+      eventId:
+        createdEvent.id,
+    }
+  );
+
   return {
     success: true,
-    event: createdEvent,
+    event:
+      createdEvent,
   };
 }

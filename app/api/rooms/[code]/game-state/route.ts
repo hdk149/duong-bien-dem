@@ -269,14 +269,6 @@ export async function GET(
 
     /* =====================================================
        3. ROOM MUST BE PLAYING
-       
-       IMPORTANT:
-       force_end_game KHÔNG đổi rooms.status sang
-       "finished" ngay lập tức.
-
-       Nó chỉ ghi end_game_payload vào rules để
-       frontend vẫn có thể gọi game-state và nhận
-       cinematic payload.
        ===================================================== */
 
     if (
@@ -289,15 +281,8 @@ export async function GET(
             "Trận đấu chưa bắt đầu.",
           roomStatus:
             room.status,
-
-          /*
-           * Giữ payload để client có thể biết
-           * developer đã trigger end game nếu
-           * room status sau này thay đổi.
-           */
           endGame:
             developerEndGame,
-
           endGamePayload:
             endGamePayload,
         },
@@ -734,6 +719,70 @@ export async function GET(
         (player) =>
           player.id
       );
+
+    /* =====================================================
+       SHOP TIMING
+       
+       game_states.updated_at là timestamp server
+       ghi nhận lúc Shop Phase bắt đầu.
+
+       Engine không update updated_at liên tục khi
+       session đã ở phase "shop", nên timestamp này
+       giữ nguyên trong toàn bộ 75 giây.
+       ===================================================== */
+
+    let shopStartedAt:
+      | string
+      | null = null;
+
+    if (
+      currentPhase === "shop"
+    ) {
+      const {
+        data: gameState,
+        error:
+          gameStateError,
+      } = await supabase
+        .from("game_states")
+        .select(
+          "updated_at"
+        )
+        .eq(
+          "room_id",
+          room.id
+        )
+        .order(
+          "updated_at",
+          {
+            ascending: false,
+          }
+        )
+        .limit(1)
+        .maybeSingle();
+
+      if (
+        gameStateError
+      ) {
+        console.error(
+          "GAME STATE - GAME STATE ERROR:",
+          gameStateError
+        );
+      } else {
+        shopStartedAt =
+          gameState?.updated_at ??
+          null;
+      }
+    }
+
+    /*
+     * Đây là thời gian server tại thời điểm
+     * API response được tạo.
+     *
+     * Frontend dùng serverNow - shopStartedAt
+     * để tính countdown.
+     */
+    const serverNow =
+      new Date().toISOString();
 
     /* =====================================================
        6. LOAD PRIVATE PLAYER EVENT
@@ -1298,10 +1347,6 @@ export async function GET(
           dice_system:
             room.dice_system,
 
-          /* =============================================
-             END GAME
-             ============================================= */
-
           endGame:
             developerEndGame,
 
@@ -1349,6 +1394,10 @@ export async function GET(
 
           createdAt:
             session.created_at,
+
+          shopStartedAt,
+
+          serverNow,
         },
 
         playerCount: {
@@ -1497,10 +1546,6 @@ export async function GET(
 
         isDeveloper,
 
-        /* =================================================
-           ROOM
-           ================================================= */
-
         room: {
           id:
             room.id,
@@ -1549,10 +1594,6 @@ export async function GET(
           dice_system:
             room.dice_system,
 
-          /* =============================================
-             END GAME
-             ============================================= */
-
           endGame:
             developerEndGame,
 
@@ -1565,10 +1606,6 @@ export async function GET(
           end_game_payload:
             endGamePayload,
         },
-
-        /* =================================================
-           SESSION
-           ================================================= */
 
         session: {
           id:
@@ -1613,11 +1650,12 @@ export async function GET(
 
           createdAt:
             session.created_at,
-        },
 
-        /* =================================================
-           CURRENT PLAYER
-           ================================================= */
+          shopStartedAt,
+
+          shop_started_at:
+            shopStartedAt,
+        },
 
         currentPlayer: {
           id:
@@ -1672,23 +1710,11 @@ export async function GET(
               }),
         },
 
-        /* =================================================
-           ACTIVE PLAYERS
-           ================================================= */
-
         players:
           safePlayers,
 
-        /* =================================================
-           PRIVATE EVENT
-           ================================================= */
-
         event:
           safeEvent,
-
-        /* =================================================
-           NEW PRIVATE EVENT FORMAT
-           ================================================= */
 
         playerEvent:
           playerEvent
@@ -1744,10 +1770,6 @@ export async function GET(
               }
             : null,
 
-        /* =================================================
-           CHOICE STATUS
-           ================================================= */
-
         choiceStatus: {
           selected:
             selectedChoiceId !==
@@ -1778,15 +1800,22 @@ export async function GET(
             sourceGameEventId,
         },
 
-        /* =================================================
-           DEVELOPER ONLY
-           ================================================= */
-
         ...(developerData
           ? {
               developerData,
             }
           : {}),
+
+        /* =================================================
+           SHOP TIMER
+           ================================================= */
+
+        shopStartedAt,
+
+        shop_started_at:
+          shopStartedAt,
+
+        serverNow,
 
         /* =================================================
            DEBUG TIMING

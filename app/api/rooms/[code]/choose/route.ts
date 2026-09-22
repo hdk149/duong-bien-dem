@@ -8,7 +8,7 @@ import type {
 } from "@/lib/game/types";
 
 import { getVoteProgress } from "@/lib/game/vote";
-import { resolveCurrentRound } from "@/lib/game/resolve-service";
+import { generatePlayerRoundEvents } from "@/lib/game/rounds";
 
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -38,200 +38,6 @@ type RouteContext = {
     code: string;
   }>;
 };
-
-/* =====================================================
-   FORCED END HELPERS
-   ===================================================== */
-
-/**
- * Những trạng thái này đều được xem là GAME ĐÃ KẾT THÚC.
- *
- * Mục tiêu:
- * - client cũ không được vote tiếp
- * - request race với developer force-end không được ghi vote
- * - không được resolve round
- * - không được advance sang round mới
- */
-function isForcedEndStatus(
-  value: string | null | undefined
-): boolean {
-  const normalized =
-    String(value ?? "")
-      .trim()
-      .toLowerCase();
-
-  return [
-    "forced_end",
-    "force_end",
-    "force_ended",
-    "developer_end",
-    "developer_ended",
-    "ended",
-    "finished",
-    "game_ended",
-  ].includes(normalized);
-}
-
-/**
- * Trả response thống nhất cho frontend.
- *
- * Frontend có thể bắt:
- *
- * response.gameEnded === true
- * response.endReason === "developer"
- *
- * rồi chuyển sang page:
- *
- * "THIS GAME IS ENDED BY DEVELOPER"
- */
-function forcedEndResponse() {
-  return NextResponse.json(
-    {
-      success: false,
-
-      gameEnded: true,
-
-      endReason:
-        "developer",
-
-      error:
-        "Game này đã được kết thúc bởi developer.",
-
-      message:
-        "This game is ended by developer.",
-    },
-    {
-      status: 409,
-    }
-  );
-}
-
-/**
- * Kiểm tra session hiện tại có còn active hay đã bị
- * developer kết thúc hay không.
- */
-async function getCurrentSession(
-  roomId: string
-) {
-  const {
-    data,
-    error,
-  } = await supabase
-    .from("game_sessions")
-    .select(`
-      id,
-      room_id,
-      session_number,
-      status,
-      round,
-      phase,
-      current_event_id
-    `)
-    .eq(
-      "room_id",
-      roomId
-    )
-    .order(
-      "session_number",
-      {
-        ascending: false,
-      }
-    )
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(
-      `Không thể tải game session: ${error.message}`
-    );
-  }
-
-  return data;
-}
-
-/**
- * Kiểm tra room + session.
- *
- * Đây là SERVER-SIDE SOURCE OF TRUTH.
- */
-async function checkGameNotForcedEnded(
-  roomId: string
-): Promise<{
-  ended: boolean;
-  session: {
-    id: string;
-    room_id: string;
-    session_number?: number | null;
-    status: string;
-    round: number;
-    phase: string;
-    current_event_id: string | null;
-  } | null;
-}> {
-  const {
-    data: room,
-    error: roomError,
-  } = await supabase
-    .from("rooms")
-    .select(`
-      id,
-      status
-    `)
-    .eq(
-      "id",
-      roomId
-    )
-    .maybeSingle();
-
-  if (roomError) {
-    throw new Error(
-      `Không thể kiểm tra trạng thái room: ${roomError.message}`
-    );
-  }
-
-  if (
-    room &&
-    isForcedEndStatus(
-      room.status
-    )
-  ) {
-    return {
-      ended: true,
-      session: null,
-    };
-  }
-
-  const session =
-    await getCurrentSession(
-      roomId
-    );
-
-  if (!session) {
-    return {
-      ended: false,
-      session: null,
-    };
-  }
-
-  if (
-    isForcedEndStatus(
-      session.status
-    ) ||
-    isForcedEndStatus(
-      session.phase
-    )
-  ) {
-    return {
-      ended: true,
-      session,
-    };
-  }
-
-  return {
-    ended: false,
-    session,
-  };
-}
 
 /* =====================================================
    FALLBACK EVENT
@@ -304,7 +110,34 @@ const EMPTY_UUID =
   "00000000-0000-0000-0000-000000000000";
 
 /* =====================================================
+   SHOP SCHEDULE
+   =====================================================
+
+   Shop mở SAU khi hoàn thành mỗi 6 round:
+
+   Round 6  -> Shop -> Round 7
+   Round 12 -> Shop -> Round 13
+   Round 18 -> Shop -> Round 19
+   Round 24 -> Shop -> Round 25
+
+   Round tiếp theo vẫn được generate sẵn,
+   nhưng game_sessions.phase = "shop" nên
+   người chơi không thể vote cho tới khi shop đóng.
+   ===================================================== */
+
+const SHOP_INTERVAL = 6;
+
+/* =====================================================
    GET ACTIVE PLAYERS
+   =====================================================
+
+   SOURCE OF TRUTH cho vote.
+
+   Host + player
+   + moderation_status = active
+
+   Spectator không vote.
+   Kicked / banned không vote.
    ===================================================== */
 
 async function getActivePlayers(
@@ -670,41 +503,12 @@ async function autoResolve(
   round: number
 ) {
   /* ===================================================
-     0. HARD STOP IF GAME WAS FORCED ENDED
-     =================================================== */
+     1. LOAD ACTIVE PLAYERS AGAIN
 
-  const preResolveState =
-    await checkGameNotForcedEnded(
-      roomId
-    );
+     KHÔNG tin danh sách players truyền từ request.
 
-  if (
-    preResolveState.ended
-  ) {
-    console.warn(
-      "AUTO RESOLVE BLOCKED: GAME FORCED ENDED"
-    );
-
-    return {
-      resolved: false,
-      alreadyResolving: false,
-      gameEnded: true,
-    };
-  }
-
-  if (
-    !preResolveState.session ||
-    preResolveState.session.id !==
-      sessionId
-  ) {
-    return {
-      resolved: false,
-      alreadyResolving: false,
-    };
-  }
-
-  /* ===================================================
-     1. LOAD ACTIVE PLAYERS
+     Query DB lại ngay trước khi resolve để xử lý
+     trường hợp player vừa bị kick / ban.
      =================================================== */
 
   const {
@@ -718,10 +522,17 @@ async function autoResolve(
   console.log(
     "ACTIVE PLAYERS DEBUG:",
     players.map((p) => ({
-      id: p.id,
-      name: p.player_name,
-      role: p.role,
-      choice: p.last_choice,
+      id:
+        p.id,
+
+      name:
+        p.player_name,
+
+      role:
+        p.role,
+
+      choice:
+        p.last_choice,
     }))
   );
 
@@ -737,7 +548,13 @@ async function autoResolve(
     };
   }
 
-  if (players.length === 0) {
+  /* ===================================================
+     NO ACTIVE PLAYERS
+     =================================================== */
+
+  if (
+    players.length === 0
+  ) {
     console.warn(
       "AUTO RESOLVE ABORTED: NO ACTIVE PLAYERS"
     );
@@ -803,6 +620,10 @@ async function autoResolve(
     };
   }
 
+  /* ===================================================
+     SOMEONE ELSE ALREADY CLAIMED RESOLVE
+     =================================================== */
+
   if (!claimedSession) {
     return {
       resolved: false,
@@ -811,30 +632,7 @@ async function autoResolve(
   }
 
   /* ===================================================
-     3. CHECK AGAIN AFTER CLAIM
-     =================================================== */
-
-  const afterClaimState =
-    await checkGameNotForcedEnded(
-      roomId
-    );
-
-  if (
-    afterClaimState.ended
-  ) {
-    console.warn(
-      "AUTO RESOLVE ABORTED AFTER CLAIM: GAME FORCED END"
-    );
-
-    return {
-      resolved: false,
-      alreadyResolving: false,
-      gameEnded: true,
-    };
-  }
-
-  /* ===================================================
-     4. SYNC RESOLVING
+     3. SYNC RESOLVING
      =================================================== */
 
   await syncGameState(
@@ -846,7 +644,7 @@ async function autoResolve(
   );
 
   /* ===================================================
-     5. ACTIVE PLAYER IDS
+     4. ACTIVE PLAYER IDS
      =================================================== */
 
   const playerIds =
@@ -856,7 +654,11 @@ async function autoResolve(
     );
 
   /* ===================================================
-     6. GET VOTES
+     5. GET VOTES
+
+     Chỉ lấy vote của ACTIVE players.
+
+     Vote của player đã bị kick/ban bị bỏ qua.
      =================================================== */
 
   const {
@@ -946,7 +748,7 @@ async function autoResolve(
     );
 
   /* ===================================================
-     7. FINAL PROGRESS CHECK
+     6. FINAL PROGRESS CHECK
      =================================================== */
 
   const finalProgress =
@@ -959,8 +761,11 @@ async function autoResolve(
     "AUTO RESOLVE FINAL PROGRESS:",
     {
       roomId,
+
       sessionId,
+
       eventId,
+
       round,
 
       chosenPlayers:
@@ -974,6 +779,10 @@ async function autoResolve(
     }
   );
 
+  /* ===================================================
+     NOT ENOUGH VOTES
+     =================================================== */
+
   if (
     !finalProgress.allPlayersChosen
   ) {
@@ -981,7 +790,9 @@ async function autoResolve(
       "RESOLVE CLAIMED BUT NOT ALL ACTIVE PLAYERS VOTED:",
       {
         sessionId,
+
         eventId,
+
         round,
 
         chosenPlayers:
@@ -1034,7 +845,7 @@ async function autoResolve(
   }
 
   /* ===================================================
-     8. EXACT COUNT CHECK
+     EXACT COUNT CHECK
      =================================================== */
 
   if (
@@ -1088,52 +899,47 @@ async function autoResolve(
   }
 
   /* ===================================================
-     9. CHECK FORCED END BEFORE AI RESOLVE
+     7. SAVE RESOLVE RESULT
      =================================================== */
 
-  const beforeAiState =
-    await checkGameNotForcedEnded(
-      roomId
-    );
+  const resolveResult = {
+    resolved:
+      true,
 
-  if (
-    beforeAiState.ended
-  ) {
-    return {
-      resolved: false,
-      alreadyResolving: false,
-      gameEnded: true,
-    };
-  }
+    session_id:
+      sessionId,
 
-  /* ===================================================
-     10. LOAD SOURCE EVENT
-     =================================================== */
+    event_id:
+      eventId,
+
+    round,
+
+    votes:
+      votes.map(
+        (vote) => ({
+          player_id:
+            vote.player_id,
+
+          choice_id:
+            vote.choice_id,
+        })
+      ),
+
+    effects: [],
+  };
 
   const {
-    data: sourceEvent,
     error:
-      sourceEventError,
+      saveResultError,
   } = await supabase
     .from("game_events")
-    .select(`
-      id,
-      room_id,
-      session_id,
-      round,
-      title,
-      description,
-      event_type,
-      choices,
-      result
-    `)
+    .update({
+      result:
+        resolveResult,
+    })
     .eq(
       "id",
       eventId
-    )
-    .eq(
-      "room_id",
-      roomId
     )
     .eq(
       "session_id",
@@ -1142,16 +948,12 @@ async function autoResolve(
     .eq(
       "round",
       round
-    )
-    .maybeSingle();
+    );
 
-  if (
-    sourceEventError ||
-    !sourceEvent
-  ) {
+  if (saveResultError) {
     console.error(
-      "RESOLVE SOURCE EVENT ERROR:",
-      sourceEventError
+      "RESOLVE SAVE RESULT ERROR:",
+      saveResultError
     );
 
     await supabase
@@ -1196,145 +998,11 @@ async function autoResolve(
   }
 
   /* ===================================================
-     11. REAL RESOLVE PIPELINE
-     =================================================== */
+     8. RESET LAST CHOICE
 
-  let resolveResult;
+     Chỉ reset ACTIVE players.
 
-  try {
-    resolveResult =
-      await resolveCurrentRound({
-        supabase,
-
-        roomId,
-
-        sessionId,
-
-        round,
-
-        event:
-          sourceEvent,
-
-        players,
-
-        votes,
-      });
-  } catch (error) {
-    console.error(
-      "RESOLVE CURRENT ROUND ERROR:",
-      error
-    );
-
-    await supabase
-      .from("game_sessions")
-      .update({
-        phase:
-          "choosing",
-      })
-      .eq(
-        "id",
-        sessionId
-      )
-      .eq(
-        "status",
-        "active"
-      )
-      .eq(
-        "round",
-        round
-      )
-      .eq(
-        "phase",
-        "resolving"
-      )
-      .eq(
-        "current_event_id",
-        eventId
-      );
-
-    await syncGameState(
-      sessionId,
-      roomId,
-      round,
-      "choosing",
-      eventId
-    );
-
-    return {
-      resolved: false,
-      alreadyResolving: false,
-    };
-  }
-
-  console.log(
-    "ROUND RESOLVED SUCCESSFULLY:",
-    {
-      roomId,
-      sessionId,
-      round,
-      eventId,
-
-      appliedPlayers:
-        resolveResult
-          .appliedPlayers
-          .map(
-            (player) => ({
-              player_id:
-                player.player_id,
-
-              hp_before:
-                player.hp_before,
-
-              hp_after:
-                player.hp_after,
-
-              money_before:
-                player.money_before,
-
-              money_after:
-                player.money_after,
-
-              location_before:
-                player.location_before,
-
-              location_after:
-                player.location_after,
-
-              legal_risk_before:
-                player.legal_risk_before,
-
-              legal_risk_after:
-                player.legal_risk_after,
-            })
-          ),
-    }
-  );
-
-  /* ===================================================
-     12. CHECK FORCED END AFTER RESOLVE
-     =================================================== */
-
-  const afterResolveState =
-    await checkGameNotForcedEnded(
-      roomId
-    );
-
-  if (
-    afterResolveState.ended
-  ) {
-    console.warn(
-      "ROUND RESOLVED BUT GAME WAS FORCED ENDED. STOPPING BEFORE NEXT ROUND."
-    );
-
-    return {
-      resolved: false,
-      alreadyResolving: false,
-      gameEnded: true,
-    };
-  }
-
-  /* ===================================================
-     13. RESET LAST CHOICE
+     Player kicked/ban không cần reset.
      =================================================== */
 
   const {
@@ -1367,107 +1035,32 @@ async function autoResolve(
   }
 
   /* ===================================================
-     14. NEXT ROUND
+     9. NEXT ROUND
      =================================================== */
 
   const nextRound =
     round + 1;
 
-  /*
-   * IMPORTANT:
-   * Check AGAIN before generating the next event.
-   */
-  const beforeNextRoundState =
-    await checkGameNotForcedEnded(
-      roomId
-    );
-
-  if (
-    beforeNextRoundState.ended
-  ) {
-    console.warn(
-      "NEXT ROUND BLOCKED: GAME FORCED END"
-    );
-
-    return {
-      resolved: false,
-      alreadyResolving: false,
-      gameEnded: true,
-    };
-  }
-
-  let nextEvent;
-
-  try {
-    nextEvent =
-      await generateNextEvent(
-        roomId,
-        sessionId,
-        nextRound
-      );
-  } catch (error) {
-    console.error(
-      "RESOLVE NEXT EVENT ERROR:",
-      error
-    );
-
-    await supabase
-      .from("game_sessions")
-      .update({
-        phase:
-          "choosing",
-      })
-      .eq(
-        "id",
-        sessionId
-      )
-      .eq(
-        "status",
-        "active"
-      )
-      .eq(
-        "round",
-        round
-      )
-      .eq(
-        "phase",
-        "resolving"
-      )
-      .eq(
-        "current_event_id",
-        eventId
-      );
-
-    await syncGameState(
-      sessionId,
+  const nextEvent =
+    await generateNextEvent(
       roomId,
-      round,
-      "choosing",
-      eventId
+      sessionId,
+      nextRound
     );
-
-    return {
-      resolved: false,
-      alreadyResolving: false,
-    };
-  }
 
   /* ===================================================
-     15. LOAD PLAYERS FOR NEXT ROUND
+     9B. GENERATE PRIVATE PLAYER EVENTS
      =================================================== */
 
   const {
-    players:
-      nextRoundPlayers,
+    players: nextRoundPlayers,
     error:
       nextRoundPlayersError,
   } = await getActivePlayers(
     roomId
   );
 
-  if (
-    nextRoundPlayersError
-  ) {
+  if (nextRoundPlayersError) {
     console.error(
       "RESOLVE NEXT ROUND PLAYERS ERROR:",
       nextRoundPlayersError
@@ -1514,214 +1107,26 @@ async function autoResolve(
     };
   }
 
-  /* ===================================================
-     16. SAVE AI-GENERATED PRIVATE EVENTS
-     =================================================== */
-
   try {
-    const nextEvents =
-      resolveResult.nextEvents;
+    await generatePlayerRoundEvents({
+      supabase,
 
-    if (
-      nextEvents.round !==
-      nextRound
-    ) {
-      throw new Error(
-        `AI next events round mismatch: expected ${nextRound}, received ${nextEvents.round}.`
-      );
-    }
+      roomId,
 
-    const nextEventPlayers =
-      new Map(
-        nextEvents.players.map(
-          (item) => [
-            item.player_id,
-            item,
-          ]
-        )
-      );
+      sessionId,
 
-    for (
-      const player of
-        nextRoundPlayers
-    ) {
-      if (
-        !nextEventPlayers.has(
-          player.id
-        )
-      ) {
-        throw new Error(
-          `AI next event missing for player ${player.id}.`
-        );
-      }
-    }
+      round:
+        nextRound,
 
-    if (
-      nextEvents.players.length !==
-      nextRoundPlayers.length
-    ) {
-      throw new Error(
-        `AI returned ${nextEvents.players.length} next-round events, expected ${nextRoundPlayers.length}.`
-      );
-    }
+      players:
+        nextRoundPlayers,
 
-    const nextPlayerEventRows =
-      nextRoundPlayers.map(
-        (player) => {
-          const aiPlayerEvent =
-            nextEventPlayers.get(
-              player.id
-            );
-
-          if (!aiPlayerEvent) {
-            throw new Error(
-              `Missing AI next event for player ${player.id}.`
-            );
-          }
-
-          return {
-            room_id:
-              roomId,
-
-            session_id:
-              sessionId,
-
-            round:
-              nextRound,
-
-            player_id:
-              player.id,
-
-            source_event_id:
-              nextEvent.id,
-
-            title:
-              aiPlayerEvent.event
-                .title,
-
-            description:
-              aiPlayerEvent.event
-                .description,
-
-            event_type:
-              aiPlayerEvent.event
-                .type,
-
-            choices:
-              aiPlayerEvent.event
-                .choices,
-
-            selected_choice_id:
-              null,
-
-            result:
-              null,
-
-            status:
-              "pending",
-
-            resolved_at:
-              null,
-          };
-        }
-      );
-
-    const {
-      data:
-        savedNextPlayerEvents,
-      error:
-        saveNextPlayerEventsError,
-    } = await supabase
-      .from("player_round_events")
-      .upsert(
-        nextPlayerEventRows,
-        {
-          onConflict:
-            "session_id,round,player_id",
-        }
-      )
-      .select(
-        "id, player_id, round, status"
-      );
-
-    if (
-      saveNextPlayerEventsError
-    ) {
-      throw new Error(
-        `Không thể lưu event riêng của round tiếp theo: ${saveNextPlayerEventsError.message}`
-      );
-    }
-
-    if (
-      !savedNextPlayerEvents ||
-      savedNextPlayerEvents.length !==
-        nextPlayerEventRows.length
-    ) {
-      throw new Error(
-        `Số lượng private events round ${nextRound} không khớp: expected ${nextPlayerEventRows.length}, received ${savedNextPlayerEvents?.length ?? 0}.`
-      );
-    }
-
-    const {
-      data:
-        verifiedNextEvents,
-      error:
-        verifyNextEventsError,
-    } = await supabase
-      .from("player_round_events")
-      .select(
-        "id, player_id, round, status"
-      )
-      .eq(
-        "session_id",
-        sessionId
-      )
-      .eq(
-        "round",
-        nextRound
-      )
-      .in(
-        "player_id",
-        nextRoundPlayers.map(
-          (player) =>
-            player.id
-        )
-      );
-
-    if (
-      verifyNextEventsError
-    ) {
-      throw new Error(
-        `Không thể xác nhận private events round tiếp theo: ${verifyNextEventsError.message}`
-      );
-    }
-
-    if (
-      !verifiedNextEvents ||
-      verifiedNextEvents.length !==
-        nextRoundPlayers.length
-    ) {
-      throw new Error(
-        `Round ${nextRound} chưa có đủ private events.`
-      );
-    }
-
-    console.log(
-      "NEXT ROUND EVENTS SAVED FROM SAME AI BATCH:",
-      {
-        round:
-          nextRound,
-
-        sourceEventId:
-          nextEvent.id,
-
-        players:
-          verifiedNextEvents.length,
-      }
-    );
+      sourceEventId:
+        nextEvent.id,
+    });
   } catch (error) {
     console.error(
-      "RESOLVE SAVE AI NEXT EVENTS ERROR:",
+      "RESOLVE GENERATE PRIVATE EVENTS ERROR:",
       error
     );
 
@@ -1761,39 +1166,38 @@ async function autoResolve(
     );
 
     return {
-      resolved:
-        false,
-
-      alreadyResolving:
-        false,
-    };
-  }
-
-  /* ===================================================
-     17. FINAL HARD CHECK BEFORE ADVANCING
-     =================================================== */
-
-  const finalGameState =
-    await checkGameNotForcedEnded(
-      roomId
-    );
-
-  if (
-    finalGameState.ended
-  ) {
-    console.warn(
-      "NEXT ROUND ADVANCE BLOCKED: GAME FORCED END"
-    );
-
-    return {
       resolved: false,
       alreadyResolving: false,
-      gameEnded: true,
     };
   }
 
   /* ===================================================
-     18. MOVE TO NEXT ROUND
+     9C. SHOP TRANSITION
+     ===================================================
+
+     Shop mở SAU mỗi 6 round hoàn thành.
+
+     Round 6  -> Shop -> Round 7
+     Round 12 -> Shop -> Round 13
+     Round 18 -> Shop -> Round 19
+     Round 24 -> Shop -> Round 25
+
+     Round tiếp theo đã được generate sẵn,
+     nhưng người chơi không thể vote cho tới khi
+     shop flow đóng phase "shop".
+     =================================================== */
+
+  const shouldOpenShop =
+    round > 0 &&
+    round % SHOP_INTERVAL === 0;
+
+  const nextPhase =
+    shouldOpenShop
+      ? "shop"
+      : "choosing";
+
+  /* ===================================================
+     10. MOVE TO NEXT ROUND
      =================================================== */
 
   const {
@@ -1807,7 +1211,7 @@ async function autoResolve(
         nextRound,
 
       phase:
-        "choosing",
+        nextPhase,
 
       current_event_id:
         nextEvent.id,
@@ -1861,16 +1265,20 @@ async function autoResolve(
   }
 
   /* ===================================================
-     19. SYNC NEXT ROUND
+     11. SYNC NEXT ROUND
      =================================================== */
 
   await syncGameState(
     sessionId,
     roomId,
     nextRound,
-    "choosing",
+    nextPhase,
     nextEvent.id
   );
+
+  /* ===================================================
+     DONE
+     =================================================== */
 
   return {
     resolved:
@@ -1884,6 +1292,9 @@ async function autoResolve(
 
     nextRound:
       nextRound,
+
+    nextPhase:
+      nextPhase,
 
     previousEventId:
       eventId,
@@ -1981,16 +1392,13 @@ export async function POST(
           ""
       ).trim();
 
-    const eventId =
-      playerEventId;
-
     const choiceId =
       String(
         body.choice_id ??
           ""
       ).trim();
 
-    if (!eventId) {
+    if (!playerEventId) {
       return NextResponse.json(
         {
           error:
@@ -2063,18 +1471,6 @@ export async function POST(
       );
     }
 
-    /* ===================================================
-       ⭐ HARD STOP: ROOM FORCED END
-       =================================================== */
-
-    if (
-      isForcedEndStatus(
-        room.status
-      )
-    ) {
-      return forcedEndResponse();
-    }
-
     if (
       room.status !==
       "playing"
@@ -2092,6 +1488,8 @@ export async function POST(
 
     /* ===================================================
        PLAYER AUTH
+
+       ACTIVE ONLY
        =================================================== */
 
     const {
@@ -2223,37 +1621,12 @@ export async function POST(
             "Không thể tải game session.",
         },
         {
-          status: 500
+          status: 500,
         }
       );
     }
 
     if (!session) {
-      /*
-       * Không có active session.
-       *
-       * Nếu room/session đã ended thì đây là
-       * game ended, không phải lỗi "game chưa bắt đầu".
-       */
-      const latestSession =
-        await getCurrentSession(
-          room.id
-        );
-
-      if (
-        latestSession &&
-        (
-          isForcedEndStatus(
-            latestSession.status
-          ) ||
-          isForcedEndStatus(
-            latestSession.phase
-          )
-        )
-      ) {
-        return forcedEndResponse();
-      }
-
       return NextResponse.json(
         {
           error:
@@ -2263,21 +1636,6 @@ export async function POST(
           status: 404,
         }
       );
-    }
-
-    /* ===================================================
-       ⭐ HARD STOP: SESSION FORCED END
-       =================================================== */
-
-    if (
-      isForcedEndStatus(
-        session.status
-      ) ||
-      isForcedEndStatus(
-        session.phase
-      )
-    ) {
-      return forcedEndResponse();
     }
 
     /* ===================================================
@@ -2309,6 +1667,9 @@ export async function POST(
     const sourceEventId =
       session.current_event_id;
 
+    const eventId =
+      sourceEventId;
+
     if (!sourceEventId) {
       return NextResponse.json(
         {
@@ -2333,6 +1694,12 @@ export async function POST(
         player.id,
         playerEventId
       );
+
+    /*
+     * Legacy fallback:
+     * Round đầu / dữ liệu cũ có thể chưa có
+     * player_round_events.
+     */
 
     const isPrivatePlayerEvent =
       Boolean(playerEvent);
@@ -2544,53 +1911,6 @@ export async function POST(
         },
         {
           status: 400,
-        }
-      );
-    }
-
-    /* ===================================================
-       ⭐ FINAL PRE-INSERT FORCED END CHECK
-       
-       Đây là check quan trọng nhất.
-       
-       Dev có thể force-end trong lúc client đang
-       chuẩn bị request.
-       Không được insert vote sau thời điểm đó.
-       =================================================== */
-
-    const preInsertState =
-      await checkGameNotForcedEnded(
-        room.id
-      );
-
-    if (
-      preInsertState.ended
-    ) {
-      return forcedEndResponse();
-    }
-
-    if (
-      !preInsertState.session ||
-      preInsertState.session.id !==
-        session.id ||
-      preInsertState.session.round !==
-        session.round ||
-      preInsertState.session.phase !==
-        "choosing"
-    ) {
-      return NextResponse.json(
-        {
-          success:
-            false,
-
-          gameEnded:
-            false,
-
-          error:
-            "Trạng thái game đã thay đổi. Vui lòng tải lại.",
-        },
-        {
-          status: 409,
         }
       );
     }
@@ -2827,55 +2147,6 @@ export async function POST(
     }
 
     /* ===================================================
-       ⭐ CHECK FORCED END IMMEDIATELY AFTER SAVE
-       
-       Nếu dev force-end đúng lúc request race,
-       frontend vẫn được báo game ended.
-       =================================================== */
-
-    const postSaveState =
-      await checkGameNotForcedEnded(
-        room.id
-      );
-
-    if (
-      postSaveState.ended
-    ) {
-      return NextResponse.json(
-        {
-          success:
-            true,
-
-          gameEnded:
-            true,
-
-          endReason:
-            "developer",
-
-          choice: {
-            id:
-              savedChoice.id,
-
-            choice_id:
-              savedChoice.choice_id,
-
-            event_id:
-              savedChoice.event_id,
-
-            created_at:
-              savedChoice.created_at,
-          },
-
-          message:
-            "Game đã được developer kết thúc.",
-        },
-        {
-          status: 409,
-        }
-      );
-    }
-
-    /* ===================================================
        RELOAD ACTIVE PLAYERS
        =================================================== */
 
@@ -2919,8 +2190,7 @@ export async function POST(
         room_id,
         round,
         phase,
-        current_event_id,
-        status
+        current_event_id
       `)
       .eq(
         "id",
@@ -2945,40 +2215,10 @@ export async function POST(
       );
     }
 
-    /* ===================================================
-       ⭐ SESSION ENDED
-       =================================================== */
-
-    if (
-      latestSession &&
-      (
-        isForcedEndStatus(
-          latestSession.status
-        ) ||
-        isForcedEndStatus(
-          latestSession.phase
-        )
-      )
-    ) {
-      return NextResponse.json(
-        {
-          success:
-            true,
-
-          gameEnded:
-            true,
-
-          endReason:
-            "developer",
-
-          message:
-            "This game is ended by developer.",
-        },
-        {
-          status: 409,
-        }
-      );
-    }
+    /*
+     * Session có thể đã chuyển round trong
+     * lúc request đang chạy.
+     */
 
     if (
       !latestSession ||
@@ -2987,7 +2227,7 @@ export async function POST(
       latestSession.phase !==
         "choosing" ||
       latestSession.current_event_id !==
-        sourceEventId
+        eventId
     ) {
       return NextResponse.json({
         success:
@@ -3112,8 +2352,7 @@ export async function POST(
         sessionId:
           session.id,
 
-        eventId:
-          sourceEventId,
+        eventId,
 
         round:
           session.round,
@@ -3130,21 +2369,6 @@ export async function POST(
     );
 
     /* ===================================================
-       FINAL CHECK BEFORE AUTO RESOLVE
-       =================================================== */
-
-    const beforeResolveState =
-      await checkGameNotForcedEnded(
-        room.id
-      );
-
-    if (
-      beforeResolveState.ended
-    ) {
-      return forcedEndResponse();
-    }
-
-    /* ===================================================
        AUTO RESOLVE
        =================================================== */
 
@@ -3155,36 +2379,9 @@ export async function POST(
         await autoResolve(
           room.id,
           session.id,
-          sourceEventId,
+          eventId,
           session.round
         );
-
-      /* ===============================================
-         ⭐ GAME FORCED END
-         =============================================== */
-
-      if (
-        resolve.gameEnded
-      ) {
-        return NextResponse.json(
-          {
-            success:
-              false,
-
-            gameEnded:
-              true,
-
-            endReason:
-              "developer",
-
-            message:
-              "This game is ended by developer.",
-          },
-          {
-            status: 409,
-          }
-        );
-      }
 
       /* ===============================================
          RESOLVED
@@ -3222,6 +2419,9 @@ export async function POST(
           nextRound:
             resolve.nextRound,
 
+          nextPhase:
+            resolve.nextPhase,
+
           previousEventId:
             resolve.previousEventId,
 
@@ -3229,7 +2429,10 @@ export async function POST(
             resolve.nextEventId,
 
           message:
-            "Tất cả người chơi đã lựa chọn. Đang chuyển sang vòng tiếp theo.",
+            resolve.nextPhase ===
+            "shop"
+              ? `Round ${resolve.previousRound} đã kết thúc. Shop đã mở trước Round ${resolve.nextRound}.`
+              : "Tất cả người chơi đã lựa chọn. Đang chuyển sang vòng tiếp theo.",
         });
       }
 

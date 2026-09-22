@@ -1,6 +1,11 @@
 import { GoogleGenAI } from "@google/genai";
 import Groq from "groq-sdk";
 
+import {
+  callLocalAIJson,
+  type LocalAIMessage,
+} from "@/lib/ai/local";
+
 import type {
   AIHostResponse,
   AIPlayerResult,
@@ -48,7 +53,11 @@ async function generateWithRetry<T>(
 ): Promise<T> {
   let lastError: unknown;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (
+    let attempt = 1;
+    attempt <= maxAttempts;
+    attempt++
+  ) {
     try {
       return await fn();
     } catch (error) {
@@ -82,18 +91,26 @@ async function generateWithRetry<T>(
         message.includes("high demand") ||
         message.includes("temporarily unavailable");
 
-      if (!retryable || attempt === maxAttempts) {
+      if (
+        !retryable ||
+        attempt === maxAttempts
+      ) {
         throw error;
       }
 
-      const delay = attempt * 2000;
+      const delay =
+        attempt * 2000;
 
       console.warn(
         `GEMINI RETRY ${attempt}/${maxAttempts} — waiting ${delay}ms`,
       );
 
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, delay),
+      await new Promise<void>(
+        (resolve) =>
+          setTimeout(
+            resolve,
+            delay,
+          ),
       );
     }
   }
@@ -601,7 +618,7 @@ Return valid JSON only.
 }
 
 /* =====================================================
-   BATCH PROMPT
+   ROUND BATCH PROMPT
    ===================================================== */
 
 function buildRoundBatchPrompt(
@@ -959,13 +976,339 @@ Return valid JSON only.
 }
 
 /* =====================================================
+   LOCAL AI — EVENT JSON SCHEMA
+   ===================================================== */
+
+const LOCAL_EVENT_SCHEMA: Record<
+  string,
+  unknown
+> = {
+  type: "object",
+
+  additionalProperties: false,
+
+  properties: {
+    round: {
+      type: "integer",
+    },
+
+    players: {
+      type: "array",
+
+      items: {
+        type: "object",
+
+        additionalProperties: false,
+
+        properties: {
+          player_id: {
+            type: "string",
+          },
+
+          event: {
+            type: "object",
+
+            additionalProperties: false,
+
+            properties: {
+              title: {
+                type: "string",
+              },
+
+              description: {
+                type: "string",
+              },
+
+              type: {
+                type: "string",
+              },
+
+              destination: {
+                anyOf: [
+                   {type: "string"},
+                   {type: "null"},
+                ],
+              },
+
+              choices: {
+                type: "array",
+
+                minItems: 2,
+                maxItems: 4,
+
+                items: {
+                  type: "object",
+
+                  additionalProperties: false,
+
+                  properties: {
+                    id: {
+                      type: "string",
+                    },
+
+                    text: {
+                      type: "string",
+                    },
+                  },
+
+                  required: [
+                    "id",
+                    "text",
+                  ],
+                },
+              },
+            },
+
+            required: [
+              "title",
+              "description",
+              "type",
+              "destination",
+              "choices",
+            ],
+          },
+        },
+
+        required: [
+          "player_id",
+          "event",
+        ],
+      },
+    },
+  },
+
+  required: [
+    "round",
+    "players",
+  ],
+};
+
+/* =====================================================
+   LOCAL AI — OUTCOME JSON SCHEMA
+   ===================================================== */
+
+const LOCAL_OUTCOME_SCHEMA: Record<
+  string,
+  unknown
+> = {
+  type: "object",
+
+  additionalProperties: false,
+
+  properties: {
+    round: {
+      type: "integer",
+    },
+
+    players: {
+      type: "array",
+
+      items: {
+        type: "object",
+
+        additionalProperties: false,
+
+        properties: {
+          player_id: {
+            type: "string",
+          },
+
+          effects: {
+            type: "object",
+
+            additionalProperties: false,
+
+            properties: {
+              hp: {
+                type: "integer",
+              },
+
+              money: {
+                type: "integer",
+              },
+
+              location: {
+                type: "string",
+              },
+
+              legal_risk: {
+                type: "integer",
+                minimum: -10,
+                maximum: 10,
+              },
+            },
+
+            required: [
+              "hp",
+              "money",
+              "legal_risk",
+            ],
+          },
+        },
+
+        required: [
+          "player_id",
+          "effects",
+        ],
+      },
+    },
+  },
+
+  required: [
+    "round",
+    "players",
+  ],
+};
+
+/* =====================================================
+   LOCAL AI — GENERATE EVENTS
+   ===================================================== */
+
+async function generateAIHostEventsLocal(
+  context: AIHostContext
+): Promise<ValidatedAIEventResponse> {
+  const messages: LocalAIMessage[] = [
+    {
+      role: "system",
+
+      content:
+        "Bạn là AI Host của game Đường Biên Đêm. Chỉ trả về JSON đúng schema được cung cấp. Không thêm markdown, không giải thích bên ngoài JSON.",
+    },
+
+    {
+      role: "user",
+
+      content:
+        buildEventPrompt(context),
+    },
+  ];
+
+  const result =
+    await callLocalAIJson<unknown>(
+      messages,
+
+      {
+        name:
+          "game_events",
+
+        strict:
+          true,
+
+        schema:
+          LOCAL_EVENT_SCHEMA,
+      },
+
+      {
+        temperature:
+          0.7,
+
+        topP:
+          0.9,
+
+        maxTokens:
+          700,
+      },
+    );
+
+  console.log(
+    "LOCAL AI EVENTS:",
+    JSON.stringify(
+      result.raw.usage,
+      null,
+      2,
+    ),
+  );
+
+  console.log(
+    "LOCAL AI EVENTS FINISH:",
+    result.raw.finishReason,
+  );
+
+  return validateAIEventResult(
+    result.data,
+    context,
+  );
+}
+
+/* =====================================================
+   LOCAL AI — GENERATE OUTCOME
+   ===================================================== */
+
+async function generateAIHostOutcomeLocal(
+  context: AIOutcomeContext
+): Promise<ValidatedAIOutcomeResponse> {
+  const messages: LocalAIMessage[] = [
+    {
+      role: "system",
+
+      content:
+        "Bạn là AI Host của game Đường Biên Đêm. Chỉ trả về JSON đúng schema được cung cấp. Không thêm markdown, không giải thích bên ngoài JSON.",
+    },
+
+    {
+      role: "user",
+
+      content:
+        buildOutcomePrompt(context),
+    },
+  ];
+
+  const result =
+    await callLocalAIJson<unknown>(
+      messages,
+
+      {
+        name:
+          "game_outcome",
+
+        strict:
+          true,
+
+        schema:
+          LOCAL_OUTCOME_SCHEMA,
+      },
+
+      {
+        temperature:
+          0.6,
+
+        topP:
+          0.9,
+
+        maxTokens:
+          500,
+      },
+    );
+
+  console.log(
+    "LOCAL AI OUTCOME:",
+    JSON.stringify(
+      result.raw.usage,
+      null,
+      2,
+    ),
+  );
+
+  console.log(
+    "LOCAL AI OUTCOME FINISH:",
+    result.raw.finishReason,
+  );
+
+  return validateAIOutcomeResult(
+    result.data,
+    context,
+  );
+}
+
+/* =====================================================
    GROQ — GENERATE CURRENT ROUND OUTCOME ONLY
    ===================================================== */
 
 export async function generateAIHostOutcomeGroq(
   context: AIOutcomeContext
 ): Promise<ValidatedAIOutcomeResponse> {
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey =
+    process.env.GROQ_API_KEY;
 
   if (!apiKey) {
     throw new Error(
@@ -973,9 +1316,10 @@ export async function generateAIHostOutcomeGroq(
     );
   }
 
-  const groq = new Groq({
-    apiKey,
-  });
+  const groq =
+    new Groq({
+      apiKey,
+    });
 
   const prompt =
     buildOutcomePrompt(
@@ -984,24 +1328,36 @@ export async function generateAIHostOutcomeGroq(
 
   const response =
     await groq.chat.completions.create({
-      model: "openai/gpt-oss-20b",
+      model:
+        "openai/gpt-oss-20b",
+
       messages: [
         {
           role: "user",
           content: prompt,
         },
       ],
+
       temperature: 0.6,
-      reasoning_effort: "low",
-      include_reasoning: false,
-      max_completion_tokens: 1024,
+
+      reasoning_effort:
+        "low",
+
+      include_reasoning:
+        false,
+
+      max_completion_tokens:
+        1024,
+
       response_format: {
         type: "json_object",
       },
     });
 
   const responseText =
-    response.choices[0]?.message?.content;
+    response.choices[0]
+      ?.message
+      ?.content;
 
   if (!responseText) {
     throw new Error(
@@ -1036,7 +1392,8 @@ export async function generateAIHostOutcomeGroq(
 export async function generateAIHostNextEventsGroq(
   context: AIHostContext
 ): Promise<ValidatedAIEventResponse> {
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey =
+    process.env.GROQ_API_KEY;
 
   if (!apiKey) {
     throw new Error(
@@ -1044,9 +1401,10 @@ export async function generateAIHostNextEventsGroq(
     );
   }
 
-  const groq = new Groq({
-    apiKey,
-  });
+  const groq =
+    new Groq({
+      apiKey,
+    });
 
   const prompt =
     buildEventPrompt(
@@ -1055,24 +1413,36 @@ export async function generateAIHostNextEventsGroq(
 
   const response =
     await groq.chat.completions.create({
-      model: "openai/gpt-oss-20b",
+      model:
+        "openai/gpt-oss-20b",
+
       messages: [
         {
           role: "user",
           content: prompt,
         },
       ],
+
       temperature: 0.8,
-      reasoning_effort: "low",
-      include_reasoning: false,
-      max_completion_tokens: 2048,
+
+      reasoning_effort:
+        "low",
+
+      include_reasoning:
+        false,
+
+      max_completion_tokens:
+        2048,
+
       response_format: {
         type: "json_object",
       },
     });
 
   const responseText =
-    response.choices[0]?.message?.content;
+    response.choices[0]
+      ?.message
+      ?.content;
 
   if (!responseText) {
     throw new Error(
@@ -1102,25 +1472,13 @@ export async function generateAIHostNextEventsGroq(
 
 /* =====================================================
    GROQ — LEGACY ROUND BATCH
-   =====================================================
-
-   Giữ lại để các file cũ đang import
-   generateAIHostRoundBatch không bị break.
-
-   Kiến trúc mới nên dùng:
-
-   1. generateAIHostOutcomeGroq()
-   2. server apply outcome
-   3. generateAIHostNextEventsGroq()
-
-   Không nên dùng batch cho flow mới vì
-   nextRoundPlayers phải là state SAU khi resolve.
    ===================================================== */
 
 export async function generateAIHostRoundBatch(
   context: AIRoundBatchContext
 ): Promise<AIRoundBatchResponse> {
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey =
+    process.env.GROQ_API_KEY;
 
   if (!apiKey) {
     throw new Error(
@@ -1128,9 +1486,10 @@ export async function generateAIHostRoundBatch(
     );
   }
 
-  const groq = new Groq({
-    apiKey,
-  });
+  const groq =
+    new Groq({
+      apiKey,
+    });
 
   const prompt =
     buildRoundBatchPrompt(
@@ -1139,24 +1498,36 @@ export async function generateAIHostRoundBatch(
 
   const response =
     await groq.chat.completions.create({
-      model: "openai/gpt-oss-20b",
+      model:
+        "openai/gpt-oss-20b",
+
       messages: [
         {
           role: "user",
           content: prompt,
         },
       ],
+
       temperature: 0.6,
-      reasoning_effort: "low",
-      include_reasoning: false,
-      max_completion_tokens: 2048,
+
+      reasoning_effort:
+        "low",
+
+      include_reasoning:
+        false,
+
+      max_completion_tokens:
+        2048,
+
       response_format: {
         type: "json_object",
       },
     });
 
   const responseText =
-    response.choices[0]?.message?.content;
+    response.choices[0]
+      ?.message
+      ?.content;
 
   if (!responseText) {
     throw new Error(
@@ -1193,13 +1564,17 @@ export async function generateAIHostRoundBatch(
     );
   }
 
-  if (!rawResponse.outcomes) {
+  if (
+    !rawResponse.outcomes
+  ) {
     throw new Error(
       "AI round batch is missing top-level 'outcomes'."
     );
   }
 
-  if (!rawResponse.nextEvents) {
+  if (
+    !rawResponse.nextEvents
+  ) {
     throw new Error(
       "AI round batch is missing top-level 'nextEvents'."
     );
@@ -1243,7 +1618,7 @@ export async function generateAIHostRoundBatch(
    GEMINI — GENERATE PRIVATE EVENTS
    ===================================================== */
 
-export async function generateAIHostEvents(
+async function generateAIHostEventsGemini(
   context: AIHostContext
 ): Promise<ValidatedAIEventResponse> {
   const ai =
@@ -1298,7 +1673,7 @@ export async function generateAIHostEvents(
    GEMINI — GENERATE OUTCOMES
    ===================================================== */
 
-export async function generateAIHostOutcome(
+async function generateAIHostOutcomeGemini(
   context: AIOutcomeContext
 ): Promise<ValidatedAIOutcomeResponse> {
   const ai =
@@ -1345,6 +1720,136 @@ export async function generateAIHostOutcome(
 
   return validateAIOutcomeResult(
     rawResponse,
+    context
+  );
+}
+
+/* =====================================================
+   MAIN AI ROUTER — EVENTS
+   =====================================================
+
+   PRIORITY:
+
+   1. LOCAL QWEN
+   2. GEMINI
+   3. GROQ
+   ===================================================== */
+
+export async function generateAIHostEvents(
+  context: AIHostContext
+): Promise<ValidatedAIEventResponse> {
+  /* ---------------------------------------------------
+     1. LOCAL QWEN
+     --------------------------------------------------- */
+
+  try {
+    console.log(
+      "AI ROUTER → LOCAL QWEN"
+    );
+
+    return await generateAIHostEventsLocal(
+      context
+    );
+  } catch (localError) {
+    console.warn(
+      "LOCAL AI FAILED — falling back to Gemini.",
+      localError
+    );
+  }
+
+  /* ---------------------------------------------------
+     2. GEMINI
+     --------------------------------------------------- */
+
+  try {
+    console.log(
+      "AI ROUTER → GEMINI"
+    );
+
+    return await generateAIHostEventsGemini(
+      context
+    );
+  } catch (geminiError) {
+    console.warn(
+      "GEMINI FAILED — falling back to Groq.",
+      geminiError
+    );
+  }
+
+  /* ---------------------------------------------------
+     3. GROQ
+     --------------------------------------------------- */
+
+  console.log(
+    "AI ROUTER → GROQ"
+  );
+
+  return await generateAIHostNextEventsGroq(
+    context
+  );
+}
+
+/* =====================================================
+   MAIN AI ROUTER — OUTCOME
+   =====================================================
+
+   PRIORITY:
+
+   1. LOCAL QWEN
+   2. GEMINI
+   3. GROQ
+   ===================================================== */
+
+export async function generateAIHostOutcome(
+  context: AIOutcomeContext
+): Promise<ValidatedAIOutcomeResponse> {
+  /* ---------------------------------------------------
+     1. LOCAL QWEN
+     --------------------------------------------------- */
+
+  try {
+    console.log(
+      "AI ROUTER → LOCAL QWEN OUTCOME"
+    );
+
+    return await generateAIHostOutcomeLocal(
+      context
+    );
+  } catch (localError) {
+    console.warn(
+      "LOCAL AI OUTCOME FAILED — falling back to Gemini.",
+      localError
+    );
+  }
+
+  /* ---------------------------------------------------
+     2. GEMINI
+     --------------------------------------------------- */
+
+  try {
+    console.log(
+      "AI ROUTER → GEMINI OUTCOME"
+    );
+
+    return await generateAIHostOutcomeGemini(
+      context
+    );
+  } catch (geminiError) {
+    console.warn(
+      "GEMINI OUTCOME FAILED — falling back to Groq.",
+      geminiError
+    );
+  }
+
+  /* ---------------------------------------------------
+     3. GROQ
+     --------------------------------------------------- */
+
+  console.log(
+    "AI ROUTER → GROQ OUTCOME"
+  );
+
+  return await generateAIHostOutcomeGroq(
     context
   );
 }
@@ -1547,9 +2052,6 @@ function extractJson(
 
 /* =====================================================
    LEGACY GENERATE AI HOST RESULT
-   =====================================================
-
-   Giữ lại để rounds.ts hiện tại vẫn compile.
    ===================================================== */
 
 function buildLegacyPrompt(

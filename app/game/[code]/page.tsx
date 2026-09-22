@@ -1,10 +1,10 @@
 "use client";
 
 import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
+useCallback,
+useEffect,
+useRef,
+useState,
 } from "react";
 import { useParams, useRouter } from "next/navigation";
 
@@ -13,416 +13,734 @@ import { useTheme } from "../../components/ThemeProvider";
 import { supabase } from "../../../lib/supabase";
 
 import EndGameOverlay, {
-  triggerEndGame,
-  type EndGameDetail,
+triggerEndGame,
+type EndGameDetail,
 } from "../../components/EndGameOverlay";
 
 type Choice = {
-  id: string;
-  text?: string;
-  label?: string;
-  description?: string;
-  [key: string]: unknown;
+id: string;
+text?: string;
+label?: string;
+description?: string;
+[key: string]: unknown;
 };
 
 type EventData = {
-  id: string;
-  round: number;
-  title: string;
-  description: string;
-  event_type: string;
-  choices: Choice[];
+id: string;
+round: number;
+title: string;
+description: string;
+event_type: string;
+choices: Choice[];
 };
 
 type RoomPlayer = {
-  id: string;
-  player_name: string;
-  role: string;
-  hp?: number;
-  money?: number | string;
-  location?: string;
-  is_connected: boolean;
+id: string;
+player_name: string;
+role: string;
+hp?: number;
+money?: number | string;
+location?: string;
+is_connected: boolean;
 };
 
 type CurrentPlayer = {
-  id: string;
-  playerName: string;
-  hp: number;
-  money: number | string;
-  location: string;
-  role: string;
-  isConnected: boolean;
-  lastChoice: string | null;
+id: string;
+playerName: string;
+hp: number;
+money: number | string;
+location: string;
+role: string;
+isConnected: boolean;
+lastChoice: string | null;
 };
 
 type GameData = {
-  success: boolean;
+success: boolean;
 
-  room: {
-    id: string;
-    code: string;
-    hostName: string;
-    maxPlayers: number;
-    status: string;
-    goalMoney: number | string;
-    diceSystem: string;
-    endGame?: boolean;
-    endGamePayload?: Record<string, unknown> | null;
-  };
+room: {
+id: string;
+code: string;
+hostName: string;
+maxPlayers: number;
+status: string;
+goalMoney: number | string;
+diceSystem: string;
+endGame?: boolean;
+endGamePayload?: Record<string, unknown> | null;
+};
 
-  session: {
-    id: string;
-    sessionNumber: number;
-    status: string;
-    round: number;
-    phase: string;
-    currentEventId: string | null;
-  };
+session: {
+id: string;
+sessionNumber: number;
+status: string;
+round: number;
+phase: string;
+currentEventId: string | null;
+};
 
-  currentPlayer: CurrentPlayer | null;
+currentPlayer: CurrentPlayer | null;
 
-  event: EventData | null;
+event: EventData | null;
 
-  choiceStatus: {
-    selected: boolean;
-    selectedChoiceId: string | null;
-    chosenPlayers: number;
-    totalPlayers: number;
-    allPlayersChosen: boolean;
-  };
+choiceStatus: {
+selected: boolean;
+selectedChoiceId: string | null;
+chosenPlayers: number;
+totalPlayers: number;
+allPlayersChosen: boolean;
+};
 
-  players?: RoomPlayer[];
+players?: RoomPlayer[];
 };
 
 type ApiError = {
-  error?: string;
+error?: string;
 };
 
 function formatMoney(value: number | string | undefined) {
-  const number =
-    typeof value === "number"
-      ? value
-      : Number(value);
+const number =
+typeof value === "number"
+? value
+: Number(value);
 
-  if (!Number.isFinite(number)) {
-    return "0đ";
-  }
+if (!Number.isFinite(number)) {
+return "0đ";
+}
 
-  return `${new Intl.NumberFormat("vi-VN").format(number)}đ`;
+return `${new Intl.NumberFormat("vi-VN").format(number)}đ`;
 }
 
 function getChoiceText(choice: Choice) {
-  return (
-    choice.text ||
-    choice.label ||
-    choice.description ||
-    choice.id
-  );
+return (
+choice.text ||
+choice.label ||
+choice.description ||
+choice.id
+);
 }
 
 function getChoiceLetter(index: number) {
-  return String.fromCharCode(65 + index);
+return String.fromCharCode(65 + index);
 }
 
 function toNumber(
-  value: unknown,
-  fallback = 0
+value: unknown,
+fallback = 0
 ) {
-  const number = Number(value);
+const number = Number(value);
 
-  return Number.isFinite(number)
-    ? number
-    : fallback;
+return Number.isFinite(number)
+? number
+: fallback;
 }
 
 function getEndGamePlayers(
-  players: RoomPlayer[],
-  currentPlayer: CurrentPlayer | null,
-  currentRounds: number,
-  forcedMoney?: number | string
+players: RoomPlayer[],
+currentPlayer: CurrentPlayer | null,
+currentRounds: number,
+forcedMoney?: number | string
 ) {
-  return players
-    .filter(
-      (player) =>
-        player.role !== "spectator"
-    )
-    .map((player) => {
-      const isCurrent =
-        currentPlayer &&
-        player.id === currentPlayer.id;
+return players
+.filter(
+(player) =>
+player.role !== "spectator"
+)
+.map((player) => {
+const isCurrent =
+currentPlayer &&
+player.id === currentPlayer.id;
 
-      return {
-        playerName:
-          player.player_name,
+  return {
+    playerName:
+      player.player_name,
 
-        money:
-          isCurrent &&
-          forcedMoney !== undefined
-            ? forcedMoney
-            : player.money ?? 0,
+    money:
+      isCurrent &&
+      forcedMoney !== undefined
+        ? forcedMoney
+        : player.money ?? 0,
 
-        hp:
-          isCurrent &&
-          currentPlayer
-            ? currentPlayer.hp
-            : player.hp ?? 0,
+    hp:
+      isCurrent &&
+      currentPlayer
+        ? currentPlayer.hp
+        : player.hp ?? 0,
 
-        location:
-          isCurrent &&
-          currentPlayer
-            ? currentPlayer.location
-            : player.location ??
-              "Việt Nam",
+    location:
+      isCurrent &&
+      currentPlayer
+        ? currentPlayer.location
+        : player.location ??
+          "Việt Nam",
 
-        rounds:
-          currentRounds,
-      };
-    });
+    rounds:
+      currentRounds,
+  };
+});
+
 }
 
 export default function GamePage() {
-  const params = useParams();
-  const router = useRouter();
+const params = useParams();
+const router = useRouter();
 
-  const code = String(params.code);
+const code = String(params.code);
 
-  const { language } = useLanguage();
-  const { theme } = useTheme();
+const { language } = useLanguage();
+const { theme } = useTheme();
 
-  const isVietnamese =
-    language === "vi";
+const isVietnamese =
+language === "vi";
 
-  const isDark =
-    theme === "dark";
+const isDark =
+theme === "dark";
 
-  const [game, setGame] =
-    useState<GameData | null>(null);
+const [game, setGame] =
+useState<GameData | null>(null);
 
-  const [loading, setLoading] =
-    useState(true);
+const [loading, setLoading] =
+useState(true);
 
-  const [error, setError] =
-    useState("");
+const [error, setError] =
+useState("");
 
-  const [submitting, setSubmitting] =
-    useState(false);
+const [submitting, setSubmitting] =
+useState(false);
 
-  const [localChoice, setLocalChoice] =
-    useState<string | null>(null);
+const [localChoice, setLocalChoice] =
+useState<string | null>(null);
 
-  const [connectionLost, setConnectionLost] =
-    useState(false);
+const [connectionLost, setConnectionLost] =
+useState(false);
 
-  const [playersOpen, setPlayersOpen] =
-    useState(false);
+const [playersOpen, setPlayersOpen] =
+useState(false);
 
-  /*
-   * --------------------------------------------------
-   * DEVELOPER NOTIFICATION
-   * --------------------------------------------------
-   */
+/*
 
-  const [
-    developerNotification,
-    setDeveloperNotification,
-  ] = useState<string | null>(null);
+* ---
+* DEVELOPER NOTIFICATION
+* ---
 
-  const [
-    developerNotificationVisible,
-    setDeveloperNotificationVisible,
-  ] = useState(false);
+*/
 
-  const developerNotificationTimeoutRef =
-    useRef<ReturnType<
-      typeof setTimeout
-    > | null>(null);
+const [
+developerNotification,
+setDeveloperNotification,
+] = useState<string | null>(null);
 
-  const developerNotificationHideRef =
-    useRef<ReturnType<
-      typeof setTimeout
-    > | null>(null);
+const [
+developerNotificationVisible,
+setDeveloperNotificationVisible,
+] = useState(false);
 
-  /*
-   * --------------------------------------------------
-   * REQUEST CONTROL
-   * --------------------------------------------------
-   */
+const developerNotificationTimeoutRef =
+useRef<ReturnType<
+typeof setTimeout
+> | null>(null);
 
-  const requestIdRef =
-    useRef(0);
+const developerNotificationHideRef =
+useRef<ReturnType<
+typeof setTimeout
+> | null>(null);
 
-  const submittingRef =
-    useRef(false);
+/*
 
-  /*
-   * --------------------------------------------------
-   * END GAME
-   * --------------------------------------------------
-   */
+* ---
+* REQUEST CONTROL
+* ---
 
-  const endGameTriggeredRef =
-    useRef(false);
+*/
 
-  const endGamePayloadRef =
-    useRef<string | null>(null);
+const requestIdRef =
+useRef(0);
 
-  const [
-    developerWinOverlay,
-    setDeveloperWinOverlay,
-  ] = useState<EndGameDetail | null>(
-    null
+const submittingRef =
+useRef(false);
+
+/*
+
+* ---
+* END GAME
+* ---
+
+*/
+
+const endGameTriggeredRef =
+useRef(false);
+
+const endGamePayloadRef =
+useRef<string | null>(null);
+
+const [
+developerWinOverlay,
+setDeveloperWinOverlay,
+] = useState<EndGameDetail | null>(
+null
+);
+
+const devEndGameTestRef =
+useRef(false);
+
+/*
+
+* ---
+* PLAYER TOKEN
+* ---
+
+*/
+
+const getPlayerToken =
+useCallback(() => {
+if (
+typeof window ===
+"undefined"
+) {
+return null;
+}
+
+  return (
+    sessionStorage.getItem(
+      "player_token"
+    ) ||
+    localStorage.getItem(
+      "player_token"
+    )
   );
+}, []);
 
-  const devEndGameTestRef =
-    useRef(false);
+/*
 
-  /*
-   * --------------------------------------------------
-   * PLAYER TOKEN
-   * --------------------------------------------------
-   */
+* ---
+* END GAME TRIGGER
+* ---
 
-  const getPlayerToken =
-    useCallback(() => {
-      if (
-        typeof window ===
-        "undefined"
-      ) {
-        return null;
+*/
+
+const triggerGameEnd =
+useCallback(
+(detail: EndGameDetail) => {
+if (
+endGameTriggeredRef.current
+) {
+return;
+}
+
+    endGameTriggeredRef.current =
+      true;
+
+    triggerEndGame(detail);
+  },
+  []
+);
+
+/*
+
+* ---
+* SHOP OPEN
+* ---
+*
+* Shop chỉ thực sự bắt đầu khi người chơi bấm "Vào cửa hàng".
+* Server tạo shop_session và bắt đầu mốc thời gian tại request này.
+* ---
+
+*/
+
+const openShop =
+  useCallback(
+    async () => {
+      const token =
+        getPlayerToken();
+
+      if (!token) {
+        setError(
+          isVietnamese
+            ? "Không tìm thấy phiên người chơi."
+            : "Player session not found."
+        );
+        return;
       }
 
-      return (
-        sessionStorage.getItem(
-          "player_token"
-        ) ||
-        localStorage.getItem(
-          "player_token"
-        )
-      );
-    }, []);
 
-  /*
-   * --------------------------------------------------
-   * END GAME TRIGGER
-   * --------------------------------------------------
-   */
+      try {
+        const response =
+          await fetch(
+            `/api/rooms/${code}/shop/session`,
+            {
+              method: "POST",
+              cache: "no-store",
+              headers: {
+                "x-player-token":
+                  token,
+              },
+            }
+          );
 
-  const triggerGameEnd =
-    useCallback(
-      (detail: EndGameDetail) => {
-        if (
-          endGameTriggeredRef.current
-        ) {
-          return;
+        let data:
+          | Record<string, unknown>
+          | ApiError = {};
+
+        try {
+          data = await response.json();
+        } catch {
+          data = {};
         }
 
-        endGameTriggeredRef.current =
-          true;
+        if (!response.ok) {
+          throw new Error(
+            "error" in data &&
+            typeof data.error ===
+              "string"
+              ? data.error
+              : isVietnamese
+                ? "Không thể mở Shop."
+                : "Unable to open shop."
+          );
+        }
 
-        triggerEndGame(detail);
-      },
-      []
-    );
+        // Shop session được tạo ngay tại thời điểm bấm nút.
+        // Chuyển sang trang Shop để countdown bắt đầu theo session server.
+        router.push(`/shop/${code}`);
+      } catch (err) {
+        console.error(
+          "[SHOP] OPEN ERROR:",
+          err
+        );
 
-  /*
-   * --------------------------------------------------
-   * DEVELOPER END GAME TEST
-   * --------------------------------------------------
-   */
+        setError(
+          err instanceof Error
+            ? err.message
+            : isVietnamese
+              ? "Không thể mở Shop."
+              : "Unable to open shop."
+        );
+      }
+    },
+    [
+      code,
+      getPlayerToken,
+      isVietnamese,
+      router,
+    ]
+  );
 
-  const runDeveloperEndGameTest =
-    useCallback(() => {
+/*
+
+* ---
+* LOAD GAME
+* ---
+
+*/
+
+const loadGame = useCallback(
+async (silent = false) => {
+const requestId =
+++requestIdRef.current;
+
+  try {
+    const token =
+      getPlayerToken();
+
+    if (!token) {
       if (
-        typeof window ===
-        "undefined"
+        requestId !==
+        requestIdRef.current
       ) {
         return;
       }
 
-      if (
-        devEndGameTestRef.current
-      ) {
-        return;
-      }
+      setError(
+        isVietnamese
+          ? "Không tìm thấy phiên người chơi."
+          : "Player session not found."
+      );
+
+      setLoading(false);
+
+      return;
+    }
+
+    const response =
+      await fetch(
+        `/api/rooms/${code}/game-state`,
+        {
+          method: "GET",
+
+          headers: {
+            "x-player-token":
+              token,
+          },
+
+          cache: "no-store",
+        }
+      );
+
+    let data:
+      | GameData
+      | ApiError;
+
+    try {
+      data =
+        (await response.json()) as
+          | GameData
+          | ApiError;
+    } catch {
+      throw new Error(
+        isVietnamese
+          ? "Server trả về dữ liệu không hợp lệ."
+          : "Server returned invalid data."
+      );
+    }
+
+    if (
+      requestId !==
+      requestIdRef.current
+    ) {
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data &&
+        "error" in data &&
+        data.error
+          ? data.error
+          : isVietnamese
+            ? "Không thể tải trạng thái game."
+            : "Unable to load game state."
+      );
+    }
+
+    const gameData =
+      data as GameData;
+
+    if (
+      requestId !==
+      requestIdRef.current
+    ) {
+      return;
+    }
+
+    setGame(gameData);
+
+    setError("");
+
+    setConnectionLost(false);
+
+    /*
+     * ----------------------------------------------
+     * SERVER FORCE END
+     * ----------------------------------------------
+     */
+
+    if (
+      gameData.room?.endGame
+    ) {
+      const rawPayload =
+        gameData.room
+          .endGamePayload ?? {};
+
+      const payloadString =
+        JSON.stringify(
+          rawPayload
+        );
 
       if (
-        loading ||
-        !game ||
-        !game.currentPlayer
+        endGamePayloadRef.current !==
+        payloadString
       ) {
-        return;
-      }
+        endGamePayloadRef.current =
+          payloadString;
 
-      const mode =
-        new URLSearchParams(
-          window.location.search
-        ).get("devEndGame");
+        const currentPlayer =
+          gameData.currentPlayer;
 
-      if (
-        mode !== "win" &&
-        mode !== "force"
-      ) {
-        return;
-      }
+        const rounds =
+          toNumber(
+            gameData.session?.round,
+            0
+          );
 
-      devEndGameTestRef.current =
-        true;
+        const players =
+          gameData.players ?? [];
 
-      const currentPlayer =
-        game.currentPlayer;
+        let playerPayload:
+          Record<
+            string,
+            unknown
+          > | null = null;
 
-      const rounds =
-        Number.isFinite(
-          Number(
-            game.session?.round
+        if (
+          Array.isArray(
+            rawPayload.players
           )
-        )
-          ? Number(
-              game.session.round
-            )
-          : 0;
+        ) {
+          playerPayload =
+            (
+              rawPayload.players as Array<
+                Record<
+                  string,
+                  unknown
+                >
+              >
+            ).find(
+              (player) =>
+                String(
+                  player.id ??
+                    player.playerId ??
+                    ""
+                ) ===
+                String(
+                  currentPlayer?.id ??
+                    ""
+                )
+            ) ?? null;
+        }
 
-      const hp =
+        const rawMoney =
+          playerPayload?.money ??
+          currentPlayer?.money ??
+          0;
+
+        const money =
+          typeof rawMoney ===
+            "number" ||
+          typeof rawMoney ===
+            "string"
+            ? rawMoney
+            : 0;
+
+        const hp =
+          toNumber(
+            playerPayload?.hp ??
+              currentPlayer?.hp ??
+              100,
+            100
+          );
+
+        const location =
+          String(
+            playerPayload?.location ??
+              currentPlayer?.location ??
+              "Việt Nam"
+          );
+
+        const playerName =
+          String(
+            playerPayload?.playerName ??
+              playerPayload?.player_name ??
+              currentPlayer?.playerName ??
+              "Người chơi"
+          );
+
+        triggerGameEnd({
+          forced: true,
+
+          reason:
+            String(
+              rawPayload.reason ??
+                "server_force_end"
+            ),
+
+          message:
+            String(
+              rawPayload.message ??
+                (isVietnamese
+                  ? "Trận đấu đã được kết thúc bởi Developer."
+                  : "The game was ended by the Developer.")
+            ),
+
+          playerName,
+
+          money,
+
+          hp,
+
+          location,
+
+          rounds,
+
+          players:
+            getEndGamePlayers(
+              players,
+              currentPlayer,
+              rounds
+            ),
+        });
+      }
+    }
+
+    /*
+     * ----------------------------------------------
+     * NORMAL VICTORY
+     * ----------------------------------------------
+     */
+
+    if (
+      !endGameTriggeredRef.current &&
+      gameData.currentPlayer &&
+      !gameData.room.endGame
+    ) {
+      const currentMoney =
+        Number(
+          gameData.currentPlayer
+            .money
+        );
+
+      const goalMoney =
+        Number(
+          gameData.room.goalMoney
+        );
+
+      if (
         Number.isFinite(
-          Number(
-            currentPlayer.hp
-          )
-        )
-          ? Number(
-              currentPlayer.hp
-            )
-          : 100;
+          currentMoney
+        ) &&
+        Number.isFinite(
+          goalMoney
+        ) &&
+        goalMoney > 0 &&
+        currentMoney >=
+          goalMoney
+      ) {
+        const currentPlayer =
+          gameData.currentPlayer;
 
-      const players =
-        game.players ?? [];
+        const rounds =
+          toNumber(
+            gameData.session?.round,
+            0
+          );
 
-      /*
-       * ----------------------------------------------
-       * DEV WIN
-       * ----------------------------------------------
-       */
+        const players =
+          gameData.players ?? [];
 
-      if (mode === "win") {
-        const winMoney =
-          400_000_000;
-
-        setDeveloperWinOverlay({
+        triggerGameEnd({
           forced: false,
 
           reason:
-            "developer_ui_test_win",
+            "goal_reached",
 
           message:
             isVietnamese
-              ? "Bạn đã đạt mục tiêu tài sản và hoàn thành hành trình."
-              : "You reached the target wealth and completed the journey.",
+              ? `Bạn đã đạt mục tiêu ${formatMoney(
+                  goalMoney
+                )} và hoàn thành hành trình!`
+              : `You reached the ${formatMoney(
+                  goalMoney
+                )} goal and completed the journey!`,
 
           playerName:
             currentPlayer.playerName,
 
-          money: winMoney,
+          money:
+            currentPlayer.money,
 
-          hp,
+          hp: toNumber(
+            currentPlayer.hp,
+            100
+          ),
 
           location:
             currentPlayer.location,
@@ -433,1616 +751,1484 @@ export default function GamePage() {
             getEndGamePlayers(
               players,
               currentPlayer,
-              rounds,
-              winMoney
+              rounds
             ),
         });
-
-        return;
       }
+    }
 
-      /*
-       * ----------------------------------------------
-       * DEV FORCE END
-       * ----------------------------------------------
-       */
+    /*
+     * ----------------------------------------------
+     * CHOICE STATE
+     * ----------------------------------------------
+     */
 
-      triggerGameEnd({
-        forced: true,
-
-        reason:
-          "developer_ui_test_force",
-
-        message:
-          isVietnamese
-            ? "Trận đấu đã được kết thúc bởi Developer."
-            : "The game was ended by the Developer.",
-
-        playerName:
-          currentPlayer.playerName,
-
-        money:
-          currentPlayer.money,
-
-        hp,
-
-        location:
-          currentPlayer.location,
-
-        rounds,
-
-        players:
-          getEndGamePlayers(
-            players,
-            currentPlayer,
-            rounds
-          ),
-      });
-    }, [
-      game,
-      isVietnamese,
-      loading,
-      triggerGameEnd,
-    ]);
-
-  /*
-   * --------------------------------------------------
-   * LOAD GAME
-   * --------------------------------------------------
-   */
-
-  const loadGame = useCallback(
-    async (silent = false) => {
-      const requestId =
-        ++requestIdRef.current;
-
-      try {
-        const token =
-          getPlayerToken();
-
-        if (!token) {
-          if (
-            requestId !==
-            requestIdRef.current
-          ) {
-            return;
-          }
-
-          setError(
-            isVietnamese
-              ? "Không tìm thấy phiên người chơi."
-              : "Player session not found."
-          );
-
-          setLoading(false);
-
-          return;
-        }
-
-        const response =
-          await fetch(
-            `/api/rooms/${code}/game-state`,
-            {
-              method: "GET",
-
-              headers: {
-                "x-player-token":
-                  token,
-              },
-
-              cache: "no-store",
-            }
-          );
-
-        let data:
-          | GameData
-          | ApiError;
-
-        try {
-          data =
-            (await response.json()) as
-              | GameData
-              | ApiError;
-        } catch {
-          throw new Error(
-            isVietnamese
-              ? "Server trả về dữ liệu không hợp lệ."
-              : "Server returned invalid data."
-          );
-        }
-
-        if (
-          requestId !==
-          requestIdRef.current
-        ) {
-          return;
-        }
-
-        if (!response.ok) {
-          throw new Error(
-            data &&
-            "error" in data &&
-            data.error
-              ? data.error
-              : isVietnamese
-                ? "Không thể tải trạng thái game."
-                : "Unable to load game state."
-          );
-        }
-
-        const gameData =
-          data as GameData;
-
-        if (
-          requestId !==
-          requestIdRef.current
-        ) {
-          return;
-        }
-
-        setGame(gameData);
-
-        setError("");
-
-        setConnectionLost(false);
-
-        /*
-         * ----------------------------------------------
-         * SERVER FORCE END
-         * ----------------------------------------------
-         */
-
-        if (
-          gameData.room?.endGame
-        ) {
-          const rawPayload =
-            gameData.room
-              .endGamePayload ?? {};
-
-          const payloadString =
-            JSON.stringify(
-              rawPayload
-            );
-
-          if (
-            endGamePayloadRef.current !==
-            payloadString
-          ) {
-            endGamePayloadRef.current =
-              payloadString;
-
-            const currentPlayer =
-              gameData.currentPlayer;
-
-            const rounds =
-              toNumber(
-                gameData.session?.round,
-                0
-              );
-
-            const players =
-              gameData.players ?? [];
-
-            let playerPayload:
-              Record<
-                string,
-                unknown
-              > | null = null;
-
-            if (
-              Array.isArray(
-                rawPayload.players
-              )
-            ) {
-              playerPayload =
-                (
-                  rawPayload.players as Array<
-                    Record<
-                      string,
-                      unknown
-                    >
-                  >
-                ).find(
-                  (player) =>
-                    String(
-                      player.id ??
-                        player.playerId ??
-                        ""
-                    ) ===
-                    String(
-                      currentPlayer?.id ??
-                        ""
-                    )
-                ) ?? null;
-            }
-
-            /*
-             * playerPayload is Record<string, unknown>
-             * so money must be narrowed before
-             * passing it to EndGameOverlay.
-             */
-
-            const rawMoney =
-              playerPayload?.money ??
-              currentPlayer?.money ??
-              0;
-
-            const money =
-              typeof rawMoney ===
-                "number" ||
-              typeof rawMoney ===
-                "string"
-                ? rawMoney
-                : 0;
-
-            const hp =
-              toNumber(
-                playerPayload?.hp ??
-                  currentPlayer?.hp ??
-                  100,
-                100
-              );
-
-            const location =
-              String(
-                playerPayload?.location ??
-                  currentPlayer?.location ??
-                  "Việt Nam"
-              );
-
-            const playerName =
-              String(
-                playerPayload?.playerName ??
-                  playerPayload?.player_name ??
-                  currentPlayer?.playerName ??
-                  "Người chơi"
-              );
-
-            triggerGameEnd({
-              forced: true,
-
-              reason:
-                String(
-                  rawPayload.reason ??
-                    "server_force_end"
-                ),
-
-              message:
-                String(
-                  rawPayload.message ??
-                    (isVietnamese
-                      ? "Trận đấu đã được kết thúc bởi Developer."
-                      : "The game was ended by the Developer.")
-                ),
-
-              playerName,
-
-              money,
-
-              hp,
-
-              location,
-
-              rounds,
-
-              players:
-                getEndGamePlayers(
-                  players,
-                  currentPlayer,
-                  rounds
-                ),
-            });
-          }
-        }
-
-        /*
-         * ----------------------------------------------
-         * NORMAL VICTORY
-         * ----------------------------------------------
-         */
-
-        if (
-          !endGameTriggeredRef.current &&
-          gameData.currentPlayer &&
-          !gameData.room.endGame
-        ) {
-          const currentMoney =
-            Number(
-              gameData.currentPlayer
-                .money
-            );
-
-          const goalMoney =
-            Number(
-              gameData.room.goalMoney
-            );
-
-          if (
-            Number.isFinite(
-              currentMoney
-            ) &&
-            Number.isFinite(
-              goalMoney
-            ) &&
-            goalMoney > 0 &&
-            currentMoney >=
-              goalMoney
-          ) {
-            const currentPlayer =
-              gameData.currentPlayer;
-
-            const rounds =
-              toNumber(
-                gameData.session?.round,
-                0
-              );
-
-            const players =
-              gameData.players ?? [];
-
-            triggerGameEnd({
-              forced: false,
-
-              reason:
-                "goal_reached",
-
-              message:
-                isVietnamese
-                  ? `Bạn đã đạt mục tiêu ${formatMoney(
-                      goalMoney
-                    )} và hoàn thành hành trình!`
-                  : `You reached the ${formatMoney(
-                      goalMoney
-                    )} goal and completed the journey!`,
-
-              playerName:
-                currentPlayer.playerName,
-
-              money:
-                currentPlayer.money,
-
-              hp: toNumber(
-                currentPlayer.hp,
-                100
-              ),
-
-              location:
-                currentPlayer.location,
-
-              rounds,
-
-              players:
-                getEndGamePlayers(
-                  players,
-                  currentPlayer,
-                  rounds
-                ),
-            });
-          }
-        }
-
-        /*
-         * ----------------------------------------------
-         * CHOICE STATE
-         * ----------------------------------------------
-         */
-
-        if (
-          gameData.choiceStatus
-            ?.selected
-        ) {
-          setLocalChoice(
-            gameData.choiceStatus
-              .selectedChoiceId
-          );
-        } else if (
-          !submittingRef.current
-        ) {
-          setLocalChoice(null);
-        }
-      } catch (err) {
-        console.error(
-          "GAME PAGE LOAD ERROR:",
-          err
-        );
-
-        if (
-          requestId !==
-          requestIdRef.current
-        ) {
-          return;
-        }
-
-        setConnectionLost(true);
-
-        if (!silent) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : isVietnamese
-                ? "Không thể tải trạng thái game."
-                : "Unable to load game state."
-          );
-        }
-      } finally {
-        if (
-          requestId ===
-          requestIdRef.current
-        ) {
-          setLoading(false);
-        }
-      }
-    },
-    [
-      code,
-      getPlayerToken,
-      isVietnamese,
-      triggerGameEnd,
-    ]
-  );
-
-  /*
-   * --------------------------------------------------
-   * INITIAL LOAD
-   * --------------------------------------------------
-   */
-
-  useEffect(() => {
-    void loadGame(false);
-  }, [loadGame]);
-
-  /*
-   * --------------------------------------------------
-   * DEVELOPER TEST
-   * --------------------------------------------------
-   */
-
-  useEffect(() => {
     if (
-      loading ||
-      !game?.currentPlayer
+      gameData.choiceStatus
+        ?.selected
     ) {
-      return;
-    }
-
-    runDeveloperEndGameTest();
-  }, [
-    game,
-    loading,
-    runDeveloperEndGameTest,
-  ]);
-
-  /*
-   * --------------------------------------------------
-   * MAIN GAME REALTIME CHANNEL
-   * --------------------------------------------------
-   *
-   * Một channel theo room:
-   *
-   * game_sessions
-   * game_states
-   * room_players
-   *
-   * Sau mỗi thay đổi:
-   * loadGame(true)
-   *
-   * Polling 5 giây là fallback.
-   * --------------------------------------------------
-   */
-
-  useEffect(() => {
-    const roomId =
-      game?.room?.id;
-
-    if (!roomId) {
-      return;
-    }
-
-    let disposed = false;
-
-    const refresh = () => {
-      if (disposed) {
-        return;
-      }
-
-      if (
-        submittingRef.current
-      ) {
-        return;
-      }
-
-      void loadGame(true);
-    };
-
-    const channel =
-      supabase.channel(
-        `game-sync-${roomId}`
+      setLocalChoice(
+        gameData.choiceStatus
+          .selectedChoiceId
       );
-
-    channel
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "game_sessions",
-          filter: `room_id=eq.${roomId}`,
-        },
-        refresh
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "game_states",
-          filter: `room_id=eq.${roomId}`,
-        },
-        refresh
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "room_players",
-          filter: `room_id=eq.${roomId}`,
-        },
-        refresh
-      )
-      .subscribe(
-        (status) => {
-          if (
-            status ===
-            "SUBSCRIBED"
-          ) {
-            setConnectionLost(
-              false
-            );
-          }
-
-          if (
-            status ===
-              "CHANNEL_ERROR" ||
-            status ===
-              "TIMED_OUT" ||
-            status ===
-              "CLOSED"
-          ) {
-            setConnectionLost(
-              true
-            );
-          }
-        }
-      );
-
-    const interval =
-      window.setInterval(() => {
-        if (
-          submittingRef.current
-        ) {
-          return;
-        }
-
-        void loadGame(true);
-      }, 5000);
-
-    return () => {
-      disposed = true;
-
-      window.clearInterval(
-        interval
-      );
-
-      void supabase.removeChannel(
-        channel
-      );
-    };
-  }, [
-    game?.room?.id,
-    loadGame,
-  ]);
-
-  /*
-   * --------------------------------------------------
-   * DEVELOPER NOTIFICATIONS
-   * --------------------------------------------------
-   *
-   * Đây là channel riêng cho notification,
-   * không phải game-sync channel.
-   * --------------------------------------------------
-   */
-
-  useEffect(() => {
-    const roomId =
-      game?.room?.id;
-
-    if (!roomId) {
-      return;
-    }
-
-    let disposed = false;
-
-    const showNotification = (
-      message: string
-    ) => {
-      if (disposed) {
-        return;
-      }
-
-      if (
-        developerNotificationTimeoutRef.current
-      ) {
-        clearTimeout(
-          developerNotificationTimeoutRef.current
-        );
-      }
-
-      if (
-        developerNotificationHideRef.current
-      ) {
-        clearTimeout(
-          developerNotificationHideRef.current
-        );
-      }
-
-      setDeveloperNotification(
-        message
-      );
-
-      setDeveloperNotificationVisible(
-        true
-      );
-
-      developerNotificationHideRef.current =
-        setTimeout(() => {
-          if (disposed) {
-            return;
-          }
-
-          setDeveloperNotificationVisible(
-            false
-          );
-        }, 5000);
-    };
-
-    const channel =
-      supabase.channel(
-        `developer-notifications-${roomId}`
-      );
-
-    channel
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "room_notifications",
-          filter: `room_id=eq.${roomId}`,
-        },
-        (payload) => {
-          const row =
-            payload.new as Record<
-              string,
-              unknown
-            >;
-
-          const type =
-            String(
-              row.type ?? ""
-            );
-
-          const sender =
-            String(
-              row.sender ?? ""
-            );
-
-          if (
-            type !==
-              "developer" &&
-            sender !==
-              "developer"
-          ) {
-            return;
-          }
-
-          const message =
-            String(
-              row.message ??
-                row.content ??
-                ""
-            );
-
-          if (!message) {
-            return;
-          }
-
-          showNotification(
-            message
-          );
-        }
-      )
-      .subscribe();
-
-    return () => {
-      disposed = true;
-
-      if (
-        developerNotificationTimeoutRef.current
-      ) {
-        clearTimeout(
-          developerNotificationTimeoutRef.current
-        );
-      }
-
-      if (
-        developerNotificationHideRef.current
-      ) {
-        clearTimeout(
-          developerNotificationHideRef.current
-        );
-      }
-
-      void supabase.removeChannel(
-        channel
-      );
-    };
-  }, [game?.room?.id]);
-
-  /*
-   * --------------------------------------------------
-   * NOTIFICATION CLEANUP
-   * --------------------------------------------------
-   */
-
-  useEffect(() => {
-    return () => {
-      if (
-        developerNotificationTimeoutRef.current
-      ) {
-        clearTimeout(
-          developerNotificationTimeoutRef.current
-        );
-      }
-
-      if (
-        developerNotificationHideRef.current
-      ) {
-        clearTimeout(
-          developerNotificationHideRef.current
-        );
-      }
-    };
-  }, []);
-
-  /*
-   * --------------------------------------------------
-   * CHOOSE
-   * --------------------------------------------------
-   */
-
-  async function choose(
-    choiceId: string
-  ) {
-    if (
-      submitting ||
-      !game?.event ||
-      !game?.choiceStatus ||
-      game.choiceStatus.selected
+    } else if (
+      !submittingRef.current &&
+      gameData.session?.phase !==
+        "shop"
     ) {
-      return;
-    }
-
-    const token =
-      getPlayerToken();
-
-    if (!token) {
-      setError(
-        isVietnamese
-          ? "Không tìm thấy phiên người chơi."
-          : "Player session not found."
-      );
-
-      return;
-    }
-
-    const eventId =
-      game.event.id;
-
-    submittingRef.current =
-      true;
-
-    ++requestIdRef.current;
-
-    setSubmitting(true);
-    setLocalChoice(choiceId);
-    setError("");
-
-    try {
-      const response =
-        await fetch(
-          `/api/rooms/${code}/choose`,
-          {
-            method: "POST",
-
-            headers: {
-              "Content-Type":
-                "application/json",
-
-              "x-player-token":
-                token,
-            },
-
-            body: JSON.stringify({
-              event_id: eventId,
-              choice_id:
-                choiceId,
-            }),
-
-            cache: "no-store",
-          }
-        );
-
-      let data:
-        | Record<
-            string,
-            unknown
-          >
-        | ApiError = {};
-
-      try {
-        data =
-          await response.json();
-      } catch {
-        data = {};
-      }
-
-      if (!response.ok) {
-        throw new Error(
-          "error" in data &&
-          typeof data.error ===
-            "string"
-            ? data.error
-            : isVietnamese
-              ? "Không thể gửi lựa chọn."
-              : "Unable to submit choice."
-        );
-      }
-
-      await loadGame(true);
-    } catch (err) {
-      console.error(
-        "CHOOSE ERROR:",
-        err
-      );
-
       setLocalChoice(null);
+    }
+  } catch (err) {
+    console.error(
+      "GAME PAGE LOAD ERROR:",
+      err
+    );
 
+    if (
+      requestId !==
+      requestIdRef.current
+    ) {
+      return;
+    }
+
+    setConnectionLost(true);
+
+    if (!silent) {
       setError(
         err instanceof Error
           ? err.message
           : isVietnamese
-            ? "Không thể gửi lựa chọn."
-            : "Unable to submit choice."
+            ? "Không thể tải trạng thái game."
+            : "Unable to load game state."
       );
-    } finally {
-      submittingRef.current =
-        false;
-
-      setSubmitting(false);
-
-      void loadGame(true);
+    }
+  } finally {
+    if (
+      requestId ===
+      requestIdRef.current
+    ) {
+      setLoading(false);
     }
   }
+},
+[
+  code,
+  getPlayerToken,
+  isVietnamese,
+  triggerGameEnd,
+]
 
-  /*
-   * --------------------------------------------------
-   * DERIVED STATE
-   * --------------------------------------------------
-   */
+);
 
-  const phase =
-    game?.session?.phase ??
-    "";
+/*
 
-  const isChoosing =
-    phase === "choosing";
+* ---
+* INITIAL LOAD
+* ---
 
-  const isGenerating =
-    phase === "generating";
+*/
 
-  const isResolving =
-    phase === "resolving";
+useEffect(() => {
+void loadGame(false);
+}, [loadGame]);
 
-  const isResult =
-    phase === "result";
+/*
 
-  const isFinished =
-    phase === "finished" ||
-    game?.session?.status ===
-      "finished";
+* ---
+* DEVELOPER TEST
+* ---
 
-  const hasSelected =
-    Boolean(
-      game?.choiceStatus
-        ?.selected
-    ) || submitting;
+*/
 
-  const selectedChoiceId =
-    game?.choiceStatus
-      ?.selectedChoiceId ??
-    localChoice;
+const runDeveloperEndGameTest =
+useCallback(() => {
+if (
+typeof window ===
+"undefined"
+) {
+return;
+}
 
-  const chosenPlayers =
-    toNumber(
-      game?.choiceStatus
-        ?.chosenPlayers,
-      0
-    );
+  if (
+    devEndGameTestRef.current
+  ) {
+    return;
+  }
 
-  const totalPlayers =
-    toNumber(
-      game?.choiceStatus
-        ?.totalPlayers,
-      0
-    );
+  if (
+    loading ||
+    !game ||
+    !game.currentPlayer
+  ) {
+    return;
+  }
 
-  const progressText =
-    `${chosenPlayers}/${totalPlayers}`;
+  const mode =
+    new URLSearchParams(
+      window.location.search
+    ).get("devEndGame");
+
+  if (
+    mode !== "win" &&
+    mode !== "force"
+  ) {
+    return;
+  }
+
+  devEndGameTestRef.current =
+    true;
 
   const currentPlayer =
-    game?.currentPlayer ??
-    null;
+    game.currentPlayer;
 
-  const currentPlayerHp =
-    Math.max(
-      0,
-      Math.min(
-        100,
-        toNumber(
-          currentPlayer?.hp,
-          0
-        )
+  const rounds =
+    Number.isFinite(
+      Number(
+        game.session?.round
       )
-    );
-
-  const currentPlayerMoney =
-    formatMoney(
-      currentPlayer?.money
-    );
-
-  const goalMoney =
-    formatMoney(
-      game?.room?.goalMoney
-    );
-
-  /*
-   * IMPORTANT:
-   *
-   * spectator không được tính là player.
-   * host vẫn là player.
-   */
-
-  const otherPlayers =
-    (game?.players ?? [])
-      .filter(
-        (player) =>
-          player.role !==
-            "spectator" &&
-          player.id !==
-            currentPlayer?.id
-      );
-
-  const choiceProgressPercent =
-    totalPlayers > 0
-      ? Math.min(
-          100,
-          Math.round(
-            (chosenPlayers /
-              totalPlayers) *
-              100
-          )
+    )
+      ? Number(
+          game.session.round
         )
       : 0;
 
-  const phaseLabel =
-    isChoosing
-      ? isVietnamese
-        ? "LỰA CHỌN"
-        : "CHOICE"
-      : isGenerating
-        ? isVietnamese
-          ? "ĐANG TẠO"
-          : "GENERATING"
-        : isResolving
-          ? isVietnamese
-            ? "ĐANG XỬ LÝ"
-            : "RESOLVING"
-          : isResult
-            ? isVietnamese
-              ? "KẾT QUẢ"
-              : "RESULT"
-            : isFinished
-              ? isVietnamese
-                ? "HOÀN TẤT"
-                : "FINISHED"
-              : phase.toUpperCase();
+  const hp =
+    Number.isFinite(
+      Number(
+        currentPlayer.hp
+      )
+    )
+      ? Number(
+          currentPlayer.hp
+        )
+      : 100;
 
-  const pageClass =
-    isDark
-      ? "bg-[#12110f] text-[#eee7d9]"
-      : "bg-[#eee9df] text-[#27241f]";
+  const players =
+    game.players ?? [];
 
-  const cardClass =
-    isDark
-      ? "border-[#39352e] bg-[#1b1916]"
-      : "border-[#d0c8ba] bg-[#f8f4ec]";
+  if (mode === "win") {
+    const winMoney =
+      400_000_000;
 
-  const mutedClass =
-    isDark
-      ? "text-[#938c80]"
-      : "text-[#746e64]";
+    setDeveloperWinOverlay({
+      forced: false,
 
-  /*
-   * --------------------------------------------------
-   * LOADING
-   * --------------------------------------------------
-   */
+      reason:
+        "developer_ui_test_win",
 
-  if (loading && !game) {
-    return (
-      <main
-        className={`flex min-h-[100dvh] items-center justify-center px-4 ${pageClass}`}
-      >
-        <div className="w-full max-w-xs text-center">
-          <div className="mx-auto mb-5 h-10 w-10 animate-spin rounded-full border-2 border-current border-t-transparent opacity-60" />
+      message:
+        isVietnamese
+          ? "Bạn đã đạt mục tiêu tài sản và hoàn thành hành trình."
+          : "You reached the target wealth and completed the journey.",
 
-          <p className="text-sm font-bold tracking-wide">
-            {isVietnamese
-              ? "ĐANG TẢI HÀNH TRÌNH..."
-              : "LOADING JOURNEY..."}
-          </p>
-        </div>
-      </main>
+      playerName:
+        currentPlayer.playerName,
+
+      money: winMoney,
+
+      hp,
+
+      location:
+        currentPlayer.location,
+
+      rounds,
+
+      players:
+        getEndGamePlayers(
+          players,
+          currentPlayer,
+          rounds,
+          winMoney
+        ),
+    });
+
+    return;
+  }
+
+  triggerGameEnd({
+    forced: true,
+
+    reason:
+      "developer_ui_test_force",
+
+    message:
+      isVietnamese
+        ? "Trận đấu đã được kết thúc bởi Developer."
+        : "The game was ended by the Developer.",
+
+    playerName:
+      currentPlayer.playerName,
+
+    money:
+      currentPlayer.money,
+
+    hp,
+
+    location:
+      currentPlayer.location,
+
+    rounds,
+
+    players:
+      getEndGamePlayers(
+        players,
+        currentPlayer,
+        rounds
+      ),
+  });
+}, [
+  game,
+  isVietnamese,
+  loading,
+  triggerGameEnd,
+]);
+
+useEffect(() => {
+if (
+loading ||
+!game?.currentPlayer
+) {
+return;
+}
+
+runDeveloperEndGameTest();
+
+}, [
+game,
+loading,
+runDeveloperEndGameTest,
+]);
+
+/*
+
+* ---
+* MAIN GAME REALTIME CHANNEL
+* ---
+
+*/
+
+useEffect(() => {
+const roomId =
+game?.room?.id;
+
+if (!roomId) {
+  return;
+}
+
+let disposed = false;
+
+const refresh = () => {
+  if (disposed) {
+    return;
+  }
+
+  if (
+    submittingRef.current
+  ) {
+    return;
+  }
+
+  void loadGame(true);
+};
+
+const channel =
+  supabase.channel(
+    `game-sync-${roomId}`
+  );
+
+channel
+  .on(
+    "postgres_changes",
+    {
+      event: "*",
+      schema: "public",
+      table: "game_sessions",
+      filter: `room_id=eq.${roomId}`,
+    },
+    refresh
+  )
+  .on(
+    "postgres_changes",
+    {
+      event: "*",
+      schema: "public",
+      table: "game_states",
+      filter: `room_id=eq.${roomId}`,
+    },
+    refresh
+  )
+  .on(
+    "postgres_changes",
+    {
+      event: "*",
+      schema: "public",
+      table: "room_players",
+      filter: `room_id=eq.${roomId}`,
+    },
+    refresh
+  )
+  .subscribe(
+    (status) => {
+      if (
+        status ===
+        "SUBSCRIBED"
+      ) {
+        setConnectionLost(
+          false
+        );
+      }
+
+      if (
+        status ===
+          "CHANNEL_ERROR" ||
+        status ===
+          "TIMED_OUT" ||
+        status ===
+          "CLOSED"
+      ) {
+        setConnectionLost(
+          true
+        );
+      }
+    }
+  );
+
+const interval =
+  window.setInterval(() => {
+    if (
+      submittingRef.current
+    ) {
+      return;
+    }
+
+    void loadGame(true);
+  }, 5000);
+
+return () => {
+  disposed = true;
+
+  window.clearInterval(
+    interval
+  );
+
+  void supabase.removeChannel(
+    channel
+  );
+};
+
+}, [
+game?.room?.id,
+loadGame,
+]);
+
+/*
+
+* ---
+* DEVELOPER NOTIFICATIONS
+* ---
+
+*/
+
+useEffect(() => {
+const roomId =
+game?.room?.id;
+
+if (!roomId) {
+  return;
+}
+
+let disposed = false;
+
+const showNotification = (
+  message: string
+) => {
+  if (disposed) {
+    return;
+  }
+
+  if (
+    developerNotificationTimeoutRef.current
+  ) {
+    clearTimeout(
+      developerNotificationTimeoutRef.current
     );
   }
 
-  /*
-   * --------------------------------------------------
-   * ERROR WITHOUT GAME
-   * --------------------------------------------------
-   */
+  if (
+    developerNotificationHideRef.current
+  ) {
+    clearTimeout(
+      developerNotificationHideRef.current
+    );
+  }
 
-  if (!game) {
-    return (
-      <main
-        className={`flex min-h-[100dvh] items-center justify-center px-4 ${pageClass}`}
+  setDeveloperNotification(
+    message
+  );
+
+  setDeveloperNotificationVisible(
+    true
+  );
+
+  developerNotificationHideRef.current =
+    setTimeout(() => {
+      if (disposed) {
+        return;
+      }
+
+      setDeveloperNotificationVisible(
+        false
+      );
+    }, 5000);
+};
+
+const channel =
+  supabase.channel(
+    `developer-notifications-${roomId}`
+  );
+
+channel
+  .on(
+    "postgres_changes",
+    {
+      event: "INSERT",
+      schema: "public",
+      table: "room_notifications",
+      filter: `room_id=eq.${roomId}`,
+    },
+    (payload) => {
+      const row =
+        payload.new as Record<
+          string,
+          unknown
+        >;
+
+      const type =
+        String(
+          row.type ?? ""
+        );
+
+      const sender =
+        String(
+          row.sender ?? ""
+        );
+
+      if (
+        type !==
+          "developer" &&
+        sender !==
+          "developer"
+      ) {
+        return;
+      }
+
+      const message =
+        String(
+          row.message ??
+            row.content ??
+            ""
+        );
+
+      if (!message) {
+        return;
+      }
+
+      showNotification(
+        message
+      );
+    }
+  )
+  .subscribe();
+
+return () => {
+  disposed = true;
+
+  if (
+    developerNotificationTimeoutRef.current
+  ) {
+    clearTimeout(
+      developerNotificationTimeoutRef.current
+    );
+  }
+
+  if (
+    developerNotificationHideRef.current
+  ) {
+    clearTimeout(
+      developerNotificationHideRef.current
+    );
+  }
+
+  void supabase.removeChannel(
+    channel
+  );
+};
+
+}, [game?.room?.id]);
+
+/*
+
+* ---
+* NOTIFICATION CLEANUP
+* ---
+
+*/
+
+useEffect(() => {
+return () => {
+if (
+developerNotificationTimeoutRef.current
+) {
+clearTimeout(
+developerNotificationTimeoutRef.current
+);
+}
+
+  if (
+    developerNotificationHideRef.current
+  ) {
+    clearTimeout(
+      developerNotificationHideRef.current
+    );
+  }
+};
+
+}, []);
+
+/*
+
+* ---
+* CHOOSE
+* ---
+
+*/
+
+async function choose(
+choiceId: string
+) {
+if (
+submitting ||
+isShopRound ||
+!game?.event ||
+!game?.choiceStatus ||
+game.choiceStatus.selected
+) {
+return;
+}
+
+const token =
+  getPlayerToken();
+
+if (!token) {
+  setError(
+    isVietnamese
+      ? "Không tìm thấy phiên người chơi."
+      : "Player session not found."
+  );
+
+  return;
+}
+
+const eventId =
+  game.event.id;
+
+submittingRef.current =
+  true;
+
+++requestIdRef.current;
+
+setSubmitting(true);
+setLocalChoice(choiceId);
+setError("");
+
+try {
+  const response =
+    await fetch(
+      `/api/rooms/${code}/choose`,
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+
+          "x-player-token":
+            token,
+        },
+
+        body: JSON.stringify({
+          event_id: eventId,
+          choice_id:
+            choiceId,
+        }),
+
+        cache: "no-store",
+      }
+    );
+
+  let data:
+    | Record<
+        string,
+        unknown
       >
-        <div
-          className={`w-full max-w-md rounded-3xl border p-5 text-center shadow-xl sm:p-6 ${cardClass}`}
-        >
-          <div className="mb-4 text-4xl">
-            ⚠️
+    | ApiError = {};
+
+  try {
+    data =
+      await response.json();
+  } catch {
+    data = {};
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      "error" in data &&
+      typeof data.error ===
+        "string"
+        ? data.error
+        : isVietnamese
+          ? "Không thể gửi lựa chọn."
+          : "Unable to submit choice."
+    );
+  }
+
+  await loadGame(true);
+} catch (err) {
+  console.error(
+    "CHOOSE ERROR:",
+    err
+  );
+
+  setLocalChoice(null);
+
+  setError(
+    err instanceof Error
+      ? err.message
+      : isVietnamese
+        ? "Không thể gửi lựa chọn."
+        : "Unable to submit choice."
+  );
+} finally {
+  submittingRef.current =
+    false;
+
+  setSubmitting(false);
+
+  void loadGame(true);
+}
+
+}
+
+/*
+
+* ---
+* DERIVED STATE
+* ---
+
+*/
+
+const phase =
+game?.session?.phase ??
+"";
+
+const currentRound = toNumber(
+game?.session?.round,
+0
+);
+
+const isShopRound =
+phase === "shop";
+
+const isChoosing =
+phase === "choosing";
+
+const isGenerating =
+phase === "generating";
+
+const isResolving =
+phase === "resolving";
+
+const isResult =
+phase === "result";
+
+const isShop =
+phase === "shop";
+
+const isFinished =
+phase === "finished" ||
+game?.session?.status ===
+"finished";
+
+const hasSelected =
+Boolean(
+game?.choiceStatus
+?.selected
+) || submitting;
+
+const selectedChoiceId =
+game?.choiceStatus
+?.selectedChoiceId ??
+localChoice;
+
+const chosenPlayers =
+toNumber(
+game?.choiceStatus
+?.chosenPlayers,
+0
+);
+
+const totalPlayers =
+toNumber(
+game?.choiceStatus
+?.totalPlayers,
+0
+);
+
+const progressText =
+`${chosenPlayers}/${totalPlayers}`;
+
+const currentPlayer =
+game?.currentPlayer ??
+null;
+
+const currentPlayerHp =
+Math.max(
+0,
+Math.min(
+100,
+toNumber(
+currentPlayer?.hp,
+0
+)
+)
+);
+
+const currentPlayerMoney =
+formatMoney(
+currentPlayer?.money
+);
+
+const goalMoney =
+formatMoney(
+game?.room?.goalMoney
+);
+
+const otherPlayers =
+(game?.players ?? [])
+.filter(
+(player) =>
+player.role !==
+"spectator" &&
+player.id !==
+currentPlayer?.id
+);
+
+const choiceProgressPercent =
+totalPlayers > 0
+? Math.min(
+100,
+Math.round(
+(chosenPlayers /
+totalPlayers) *
+100
+)
+)
+: 0;
+
+
+const phaseLabel =
+isChoosing
+? isVietnamese
+? "LỰA CHỌN"
+: "CHOICE"
+: isGenerating
+? isVietnamese
+? "ĐANG TẠO"
+: "GENERATING"
+: isResolving
+? isVietnamese
+? "ĐANG XỬ LÝ"
+: "RESOLVING"
+: isResult
+? isVietnamese
+? "KẾT QUẢ"
+: "RESULT"
+: isShop
+? isVietnamese
+? "CỬA HÀNG"
+: "SHOP"
+: isFinished
+? isVietnamese
+? "HOÀN TẤT"
+: "FINISHED"
+: phase.toUpperCase();
+
+const pageClass =
+isDark
+? "bg-[#12110f] text-[#eee7d9]"
+: "bg-[#eee9df] text-[#27241f]";
+
+const cardClass =
+isDark
+? "border-[#39352e] bg-[#1b1916]"
+: "border-[#d0c8ba] bg-[#f8f4ec]";
+
+const mutedClass =
+isDark
+? "text-[#938c80]"
+: "text-[#746e64]";
+
+/*
+
+* ---
+* LOADING
+* ---
+
+*/
+
+if (loading && !game) {
+return (
+<main
+className={`flex min-h-[100dvh] items-center justify-center px-4 ${pageClass}`}
+> <div className="w-full max-w-xs text-center"> <div className="mx-auto mb-5 h-10 w-10 animate-spin rounded-full border-2 border-current border-t-transparent opacity-60" />
+
+      <p className="text-sm font-bold tracking-wide">
+        {isVietnamese
+          ? "ĐANG TẢI HÀNH TRÌNH..."
+          : "LOADING JOURNEY..."}
+      </p>
+    </div>
+  </main>
+);
+
+}
+
+/*
+
+* ---
+* ERROR WITHOUT GAME
+* ---
+
+*/
+
+if (!game) {
+return (
+<main
+className={`flex min-h-[100dvh] items-center justify-center px-4 ${pageClass}`}
+>
+<div
+className={`w-full max-w-md rounded-3xl border p-5 text-center shadow-xl sm:p-6 ${cardClass}`}
+> <div className="mb-4 text-4xl">
+⚠️ </div>
+
+      <h1 className="text-xl font-black">
+        {isVietnamese
+          ? "Không thể vào trận"
+          : "Unable to enter game"}
+      </h1>
+
+      <p
+        className={`mt-3 text-sm leading-6 ${mutedClass}`}
+      >
+        {error ||
+          (isVietnamese
+            ? "Không thể tải trạng thái trận đấu."
+            : "Unable to load game state.")}
+      </p>
+
+      <button
+        type="button"
+        onClick={() =>
+          router.push("/")
+        }
+        className="mt-6 min-h-12 w-full rounded-2xl bg-[#eee7d9] px-5 text-sm font-black text-[#171613] transition hover:bg-white active:scale-[0.985]"
+      >
+        BACK HOME
+      </button>
+    </div>
+  </main>
+);
+
+}
+
+/*
+
+* ---
+* MAIN
+* ---
+
+*/
+
+return (
+<>
+<main
+className={`min-h-[100dvh] overflow-x-hidden transition-colors ${pageClass}`}
+>
+{/* ==================================================
+MOBILE
+================================================== */}
+
+    <div className="md:hidden">
+      <header
+        className={[
+          "fixed inset-x-0 top-0 z-50",
+          "border-b backdrop-blur-xl",
+          isDark
+            ? "border-[#37342e] bg-[#12110f]/95"
+            : "border-[#d7d0c4] bg-[#eee9df]/95",
+        ].join(" ")}
+      >
+        <div className="mx-auto flex h-16 w-full max-w-lg items-center justify-between px-3 sm:px-4">
+          <div className="h-11 w-11 shrink-0" />
+
+          <div className="min-w-0 px-3 text-center">
+            <p
+              className={`text-[8px] font-black uppercase tracking-[0.25em] ${mutedClass}`}
+            >
+              ĐƯỜNG BIÊN ĐÊM
+            </p>
+
+            <p className="mt-0.5 truncate font-mono text-sm font-black tracking-widest">
+              {code}
+            </p>
           </div>
-
-          <h1 className="text-xl font-black">
-            {isVietnamese
-              ? "Không thể vào trận"
-              : "Unable to enter game"}
-          </h1>
-
-          <p
-            className={`mt-3 text-sm leading-6 ${mutedClass}`}
-          >
-            {error ||
-              (isVietnamese
-                ? "Không thể tải trạng thái trận đấu."
-                : "Unable to load game state.")}
-          </p>
 
           <button
             type="button"
             onClick={() =>
-              router.push("/")
+              router.push(
+                "/settings"
+              )
             }
-            className="mt-6 min-h-12 w-full rounded-2xl bg-[#eee7d9] px-5 text-sm font-black text-[#171613] transition hover:bg-white active:scale-[0.985]"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg active:scale-95"
+            aria-label="Settings"
           >
-            BACK HOME
+            ⚙️
           </button>
         </div>
-      </main>
-    );
-  }
+      </header>
 
-  /*
-   * --------------------------------------------------
-   * MAIN
-   * --------------------------------------------------
-   */
+      <div className="mx-auto w-full max-w-lg px-3 pb-28 pt-20 sm:px-4">
+        {connectionLost && (
+          <div className="mb-3 rounded-2xl border border-[#795f3c] bg-[#292219] px-4 py-3 text-xs leading-5 text-[#d5c7ae]">
+            <div className="flex items-start gap-2">
+              <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[#c8945b]" />
 
-  return (
-    <>
-      <main
-        className={`min-h-[100dvh] overflow-x-hidden transition-colors ${pageClass}`}
-      >
-        {/* ==================================================
-            MOBILE
-            ================================================== */}
-
-        <div className="md:hidden">
-          {/* MOBILE TOP HEADER */}
-
-          <header
-            className={[
-              "fixed inset-x-0 top-0 z-50",
-              "border-b backdrop-blur-xl",
-              isDark
-                ? "border-[#37342e] bg-[#12110f]/95"
-                : "border-[#d7d0c4] bg-[#eee9df]/95",
-            ].join(" ")}
-          >
-            <div className="mx-auto flex h-16 w-full max-w-lg items-center justify-between px-3 sm:px-4">
-              <button
-                type="button"
-                onClick={() =>
-                  setPlayersOpen(
-                    (value) => !value
-                  )
-                }
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-xl active:scale-95"
-                aria-label="Players"
-              >
-                ☰
-              </button>
-
-              <div className="min-w-0 px-3 text-center">
-                <p
-                  className={`text-[8px] font-black uppercase tracking-[0.25em] ${mutedClass}`}
-                >
-                  ĐƯỜNG BIÊN ĐÊM
-                </p>
-
-                <p className="mt-0.5 truncate font-mono text-sm font-black tracking-widest">
-                  {code}
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() =>
-                  router.push(
-                    "/settings"
-                  )
-                }
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg active:scale-95"
-                aria-label="Settings"
-              >
-                ⚙️
-              </button>
+              <span className="min-w-0">
+                {isVietnamese
+                  ? "Kết nối không ổn định. Game vẫn đang tự đồng bộ."
+                  : "Connection is unstable. The game is still syncing."}
+              </span>
             </div>
-          </header>
+          </div>
+        )}
 
-          {/* MOBILE CONTENT */}
+        {/* PLAYER STATUS */}
 
-          <div className="mx-auto w-full max-w-lg px-3 pb-28 pt-20 sm:px-4">
-            {/* CONNECTION */}
-
-            {connectionLost && (
-              <div className="mb-3 rounded-2xl border border-[#795f3c] bg-[#292219] px-4 py-3 text-xs leading-5 text-[#d5c7ae]">
-                <div className="flex items-start gap-2">
-                  <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[#c8945b]" />
-
-                  <span className="min-w-0">
-                    {isVietnamese
-                      ? "Kết nối không ổn định. Game vẫn đang tự đồng bộ."
-                      : "Connection is unstable. The game is still syncing."}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {/* PLAYER STATUS */}
-
-            <section
-              className={[
-                "overflow-hidden rounded-[24px] border",
-                cardClass,
-              ].join(" ")}
-            >
-              <div className="grid grid-cols-2">
-                <div className="min-w-0 border-r border-current/10 px-4 py-4">
-                  <p
-                    className={`text-[8px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
-                  >
-                    NGƯỜI CHƠI
-                  </p>
-
-                  <p className="mt-1 truncate text-sm font-black">
-                    {currentPlayer?.playerName ||
-                      "—"}
-                  </p>
-                </div>
-
-                <div className="px-4 py-4">
-                  <p
-                    className={`text-[8px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
-                  >
-                    VÒNG
-                  </p>
-
-                  <p className="mt-1 text-sm font-black">
-                    {String(
-                      game.session.round
-                    ).padStart(2, "0")}
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 border-t border-current/10">
-                <div className="min-w-0 border-r border-current/10 px-4 py-4">
-                  <p className="truncate text-sm font-black">
-                    💰{" "}
-                    {currentPlayerMoney}
-                  </p>
-
-                  <p
-                    className={`mt-1 text-[9px] font-bold ${mutedClass}`}
-                  >
-                    {isVietnamese
-                      ? "TÀI SẢN"
-                      : "MONEY"}
-                  </p>
-                </div>
-
-                <div className="px-4 py-4">
-                  <p className="text-sm font-black">
-                    ❤️{" "}
-                    {currentPlayerHp}
-                  </p>
-
-                  <p
-                    className={`mt-1 text-[9px] font-bold ${mutedClass}`}
-                  >
-                    HP
-                  </p>
-                </div>
-              </div>
-
-              <div className="border-t border-current/10 px-4 py-3">
-                <p
-                  className={`truncate text-xs font-bold ${mutedClass}`}
-                >
-                  📍{" "}
-                  {currentPlayer?.location ||
-                    "Việt Nam"}
-                </p>
-              </div>
-            </section>
-
-            {/* ROUND */}
-
-            <div className="py-5 text-center">
+        <section
+          className={[
+            "overflow-hidden rounded-[24px] border",
+            cardClass,
+          ].join(" ")}
+        >
+          <div className="grid grid-cols-2">
+            <div className="min-w-0 border-r border-current/10 px-4 py-4">
               <p
-                className={`text-[9px] font-black uppercase tracking-[0.3em] ${mutedClass}`}
+                className={`text-[8px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
               >
-                {phaseLabel}
+                NGƯỜI CHƠI
               </p>
 
-              <p className="mt-1 text-3xl font-black tracking-tight">
-                LƯỢT{" "}
+              <p className="mt-1 truncate text-sm font-black">
+                {currentPlayer?.playerName ||
+                  "—"}
+              </p>
+            </div>
+
+            <div className="px-4 py-4">
+              <p
+                className={`text-[8px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+              >
+                VÒNG
+              </p>
+
+              <p className="mt-1 text-sm font-black">
                 {String(
                   game.session.round
                 ).padStart(2, "0")}
               </p>
             </div>
+          </div>
 
-            {/* EVENT */}
+          <div className="grid grid-cols-2 border-t border-current/10">
+            <div className="min-w-0 border-r border-current/10 px-4 py-4">
+              <p className="truncate text-sm font-black">
+                💰{" "}
+                {currentPlayerMoney}
+              </p>
 
-            <section
-              className={[
-                "overflow-hidden rounded-[26px] border",
-                cardClass,
-              ].join(" ")}
+              <p
+                className={`mt-1 text-[9px] font-bold ${mutedClass}`}
+              >
+                {isVietnamese
+                  ? "TÀI SẢN"
+                  : "MONEY"}
+              </p>
+            </div>
+
+            <div className="px-4 py-4">
+              <p className="text-sm font-black">
+                ❤️{" "}
+                {currentPlayerHp}
+              </p>
+
+              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-current/10">
+                <div
+                  className="h-full rounded-full bg-[#8c9363] transition-all duration-300"
+                  style={{
+                    width: `${currentPlayerHp}%`,
+                  }}
+                />
+              </div>
+
+              <p
+                className={`mt-1 text-[9px] font-bold ${mutedClass}`}
+              >
+                HP
+              </p>
+            </div>
+          </div>
+
+          <div className="border-t border-current/10 px-4 py-3">
+            <p
+              className={`truncate text-xs font-bold ${mutedClass}`}
             >
-              {game.event ? (
-                <>
-                  {/* EVENT HEADER */}
+              📍{" "}
+              {currentPlayer?.location ||
+                "Việt Nam"}
+            </p>
+          </div>
+        </section>
 
-                  <div className="px-4 pb-5 pt-5 sm:px-5">
-                    <div className="flex items-center gap-2">
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#d6bd72]/15 text-base">
-                        🌙
-                      </span>
+        {/* ROUND */}
 
-                      <div className="min-w-0">
-                        <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[#b69c57]">
-                          {isVietnamese
-                            ? "SỰ KIỆN"
-                            : "EVENT"}
-                        </p>
+        <div className="py-5 text-center">
+          <p
+            className={`text-[9px] font-black uppercase tracking-[0.3em] ${mutedClass}`}
+          >
+            {phaseLabel}
+          </p>
 
-                        <p
-                          className={`text-[9px] font-bold ${mutedClass}`}
-                        >
-                          ROUND{" "}
-                          {
-                            game.event
-                              .round
-                          }
-                        </p>
-                      </div>
-                    </div>
+          <p className="mt-1 text-3xl font-black tracking-tight">
+            LƯỢT{" "}
+            {String(
+              game.session.round
+            ).padStart(2, "0")}
+          </p>
+        </div>
 
-                    <h1 className="mt-5 break-words text-[23px] font-black leading-tight sm:text-2xl">
-                      {game.event.title}
-                    </h1>
+        {/* EVENT / SHOP */}
 
-                    <p
-                      className={`mt-4 whitespace-pre-line break-words text-sm leading-7 ${mutedClass}`}
-                    >
-                      {
-                        game.event
-                          .description
-                      }
+        <section
+          className={[
+            "overflow-hidden rounded-[26px] border",
+            cardClass,
+          ].join(" ")}
+        >
+          {isShopRound ? (
+            <div className="px-5 py-10 text-center">
+              <div className="mb-4 text-5xl">
+                🛒
+              </div>
+
+              <p className="text-[9px] font-black uppercase tracking-[0.25em] text-[#b69c57]">
+                SHOP
+              </p>
+
+              <h2 className="mt-2 text-2xl font-black">
+                {isVietnamese
+                  ? "CỬA HÀNG SẴN SÀNG"
+                  : "SHOP READY"}
+              </h2>
+
+              <p
+                className={`mt-3 text-sm leading-6 ${mutedClass}`}
+              >
+                {isVietnamese
+                  ? "Cửa hàng chưa bắt đầu. Bấm vào nút bên dưới để mở Shop và bắt đầu 85 giây mua sắm."
+                  : "The shop has not started yet. Enter the shop below to start the 85-second shopping timer."}
+              </p>
+
+              <button
+                type="button"
+                onClick={() => void openShop()}
+                className="mt-7 w-full rounded-2xl border border-[#b69c57]/40 bg-[#b69c57]/10 px-6 py-4 text-xs font-black uppercase tracking-[0.15em] text-[#b69c57] transition active:scale-[0.98]"
+              >
+                {isVietnamese
+                  ? "VÀO CỬA HÀNG"
+                  : "ENTER SHOP"}
+              </button>
+
+              <p
+                className={`mt-4 text-[10px] leading-5 ${mutedClass}`}
+              >
+                {isVietnamese
+                  ? `Vòng ${currentRound} · Đồng hồ chỉ bắt đầu khi bạn bấm Vào cửa hàng.`
+                  : `Round ${currentRound} · The timer starts only when you enter the shop.`}
+              </p>
+            </div>
+          ) : game.event ? (
+            <>
+              <div className="px-4 pb-5 pt-5 sm:px-5">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#d6bd72]/15 text-base">
+                    🌙
+                  </span>
+
+                  <div className="min-w-0">
+                    <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[#b69c57]">
+                      {isVietnamese
+                        ? "SỰ KIỆN"
+                        : "EVENT"}
                     </p>
 
-                    <div className="mt-6">
-                      <p className="text-base font-black">
-                        {isVietnamese
-                          ? "Bạn sẽ làm gì?"
-                          : "What will you do?"}
-                      </p>
-                    </div>
+                    <p
+                      className={`text-[9px] font-bold ${mutedClass}`}
+                    >
+                      ROUND{" "}
+                      {
+                        game.event
+                          .round
+                      }
+                    </p>
+                  </div>
+                </div>
+
+                <h1 className="mt-5 break-words text-[23px] font-black leading-tight sm:text-2xl">
+                  {game.event.title}
+                </h1>
+
+                <p
+                  className={`mt-4 whitespace-pre-line break-words text-sm leading-7 ${mutedClass}`}
+                >
+                  {
+                    game.event
+                      .description
+                  }
+                </p>
+
+                <div className="mt-6">
+                  <p className="text-base font-black">
+                    {isVietnamese
+                      ? "Bạn sẽ làm gì?"
+                      : "What will you do?"}
+                  </p>
+                </div>
+              </div>
+
+              {game.event.choices
+                ?.length > 0 && (
+                <div className="border-t border-current/10 p-2.5 sm:p-3">
+                  <div className="space-y-2">
+                    {game.event.choices.map(
+                      (
+                        choice,
+                        index
+                      ) => {
+                        const isSelected =
+                          selectedChoiceId ===
+                          choice.id;
+
+                        return (
+                          <button
+                            key={
+                              choice.id
+                            }
+                            type="button"
+                            disabled={
+                              !isChoosing ||
+                              hasSelected ||
+                              submitting
+                            }
+                            onClick={() =>
+                              choose(
+                                choice.id
+                              )
+                            }
+                            className={[
+                              "flex min-h-[64px] w-full items-center gap-3 rounded-2xl border px-3 py-2.5 text-left transition",
+                              "active:scale-[0.985]",
+                              isSelected
+                                ? "border-[#d6bd72] bg-[#d6bd72]/10"
+                                : "border-current/10",
+                              !isChoosing ||
+                              hasSelected
+                                ? "cursor-default opacity-80"
+                                : "cursor-pointer",
+                            ].join(
+                              " "
+                            )}
+                          >
+                            <span
+                              className={[
+                                "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border text-sm font-black",
+                                isSelected
+                                  ? "border-[#d6bd72] bg-[#d6bd72] text-[#171613]"
+                                  : "border-current/10",
+                              ].join(
+                                " "
+                              )}
+                            >
+                              {getChoiceLetter(
+                                index
+                              )}
+                            </span>
+
+                            <span className="min-w-0 flex-1">
+                              <span className="block break-words text-sm font-black leading-6">
+                                {getChoiceText(
+                                  choice
+                                )}
+                              </span>
+
+                              {typeof choice.description ===
+                                "string" &&
+                                choice.text &&
+                                choice.description !==
+                                  choice.text && (
+                                  <span
+                                    className={`mt-1 block break-words text-xs leading-5 ${mutedClass}`}
+                                  >
+                                    {
+                                      choice.description
+                                    }
+                                  </span>
+                                )}
+                            </span>
+
+                            {isSelected && (
+                              <span className="shrink-0 text-lg font-black">
+                                ✓
+                              </span>
+                            )}
+                          </button>
+                        );
+                      }
+                    )}
                   </div>
 
-                  {/* CHOICES */}
+                  {isChoosing && (
+                    <div className="px-1 pb-1 pt-5">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <span
+                          className={`min-w-0 text-[9px] font-black uppercase tracking-[0.12em] ${mutedClass}`}
+                        >
+                          {isVietnamese
+                            ? "TIẾN ĐỘ"
+                            : "PROGRESS"}
+                        </span>
 
-                  {game.event.choices
-                    ?.length > 0 && (
-                    <div className="border-t border-current/10 p-2.5 sm:p-3">
-                      <div className="space-y-2">
-                        {game.event.choices.map(
-                          (
-                            choice,
-                            index
-                          ) => {
-                            const isSelected =
-                              selectedChoiceId ===
-                              choice.id;
-
-                            return (
-                              <button
-                                key={
-                                  choice.id
-                                }
-                                type="button"
-                                disabled={
-                                  !isChoosing ||
-                                  hasSelected ||
-                                  submitting
-                                }
-                                onClick={() =>
-                                  choose(
-                                    choice.id
-                                  )
-                                }
-                                className={[
-                                  "flex min-h-[64px] w-full items-center gap-3 rounded-2xl border px-3 py-2.5 text-left transition",
-                                  "active:scale-[0.985]",
-                                  isSelected
-                                    ? "border-[#d6bd72] bg-[#d6bd72]/10"
-                                    : "border-current/10",
-                                  !isChoosing ||
-                                  hasSelected
-                                    ? "cursor-default opacity-80"
-                                    : "cursor-pointer",
-                                ].join(
-                                  " "
-                                )}
-                              >
-                                <span
-                                  className={[
-                                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border text-sm font-black",
-                                    isSelected
-                                      ? "border-[#d6bd72] bg-[#d6bd72] text-[#171613]"
-                                      : "border-current/10",
-                                  ].join(
-                                    " "
-                                  )}
-                                >
-                                  {getChoiceLetter(
-                                    index
-                                  )}
-                                </span>
-
-                                <span className="min-w-0 flex-1">
-                                  <span className="block break-words text-sm font-black leading-6">
-                                    {getChoiceText(
-                                      choice
-                                    )}
-                                  </span>
-
-                                  {typeof choice.description ===
-                                    "string" &&
-                                    choice.text &&
-                                    choice.description !==
-                                      choice.text && (
-                                      <span
-                                        className={`mt-1 block break-words text-xs leading-5 ${mutedClass}`}
-                                      >
-                                        {
-                                          choice.description
-                                        }
-                                      </span>
-                                    )}
-                                </span>
-
-                                {isSelected && (
-                                  <span className="shrink-0 text-lg font-black">
-                                    ✓
-                                  </span>
-                                )}
-                              </button>
-                            );
+                        <span className="shrink-0 text-xs font-black">
+                          {
+                            progressText
                           }
-                        )}
+                        </span>
                       </div>
 
-                      {/* PROGRESS */}
+                      <div className="h-1.5 overflow-hidden rounded-full bg-current/10">
+                        <div
+                          className="h-full rounded-full bg-[#d6bd72] transition-all duration-300"
+                          style={{
+                            width: `${choiceProgressPercent}%`,
+                          }}
+                        />
+                      </div>
 
-                      {isChoosing && (
-                        <div className="px-1 pb-1 pt-5">
-                          <div className="mb-2 flex items-center justify-between gap-3">
-                            <span
-                              className={`min-w-0 text-[9px] font-black uppercase tracking-[0.12em] ${mutedClass}`}
-                            >
-                              {isVietnamese
-                                ? "TIẾN ĐỘ"
-                                : "PROGRESS"}
-                            </span>
-
-                            <span className="shrink-0 text-xs font-black">
-                              {
-                                progressText
-                              }
-                            </span>
-                          </div>
-
-                          <div className="h-1.5 overflow-hidden rounded-full bg-current/10">
-                            <div
-                              className="h-full rounded-full bg-[#d6bd72] transition-all duration-300"
-                              style={{
-                                width: `${choiceProgressPercent}%`,
-                              }}
-                            />
-                          </div>
-
-                          {hasSelected && (
-                            <p
-                              className={`mt-3 text-center text-[11px] leading-5 ${mutedClass}`}
-                            >
-                              {isVietnamese
-                                ? "Đã ghi nhận lựa chọn. Đang chờ người chơi còn lại..."
-                                : "Choice recorded. Waiting for the other players..."}
-                            </p>
-                          )}
-                        </div>
+                      {hasSelected && (
+                        <p
+                          className={`mt-3 text-center text-[11px] leading-5 ${mutedClass}`}
+                        >
+                          {isVietnamese
+                            ? "Đã ghi nhận lựa chọn. Đang chờ người chơi còn lại..."
+                            : "Choice recorded. Waiting for the other players..."}
+                        </p>
                       )}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="px-5 py-14 text-center">
-                  <div className="mb-4 text-4xl">
-                    {isGenerating
-                      ? "🎲"
-                      : isResolving
-                        ? "⚙️"
-                        : isResult
-                          ? "📜"
-                          : "🌙"}
-                  </div>
-
-                  <h2 className="text-xl font-black">
-                    {isGenerating
-                      ? isVietnamese
-                        ? "Đang tạo sự kiện..."
-                        : "Generating event..."
-                      : isResolving
-                        ? isVietnamese
-                          ? "Đang xử lý lựa chọn..."
-                          : "Resolving choices..."
-                        : isResult
-                          ? isVietnamese
-                            ? "Đang chuẩn bị kết quả..."
-                            : "Preparing result..."
-                          : isFinished
-                            ? isVietnamese
-                              ? "Trận đấu đã hoàn tất"
-                              : "Game finished"
-                            : isVietnamese
-                              ? "Đang chờ..."
-                              : "Waiting..."}
-                  </h2>
-
-                  <p
-                    className={`mt-3 text-sm leading-6 ${mutedClass}`}
-                  >
-                    {isGenerating ||
-                    isResolving
-                      ? isVietnamese
-                        ? "Hệ thống đang đồng bộ trạng thái giữa những người chơi."
-                        : "The system is synchronizing the game state between players."
-                      : ""}
-                  </p>
-
-                  {(isGenerating ||
-                    isResolving) && (
-                    <div className="mx-auto mt-6 h-1.5 max-w-xs overflow-hidden rounded-full bg-current/10">
-                      <div className="h-full w-1/2 animate-pulse rounded-full bg-[#d6bd72]" />
                     </div>
                   )}
                 </div>
               )}
-            </section>
-
-            {/* GOAL */}
-
-            <section
-              className={`mt-4 rounded-2xl border px-4 py-4 ${cardClass}`}
-            >
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <p
-                    className={`text-[8px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
-                  >
-                    {isVietnamese
-                      ? "MỤC TIÊU"
-                      : "GOAL"}
-                  </p>
-
-                  <p className="mt-1 truncate text-sm font-black">
-                    {goalMoney}
-                  </p>
-                </div>
-
-                <div className="shrink-0 text-right">
-                  <p
-                    className={`text-[8px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
-                  >
-                    ROOM
-                  </p>
-
-                  <p className="mt-1 font-mono text-xs font-black tracking-widest">
-                    {code}
-                  </p>
-                </div>
+            </>
+          ) : (
+            <div className="px-5 py-14 text-center">
+              <div className="mb-4 text-4xl">
+                {isGenerating
+                  ? "🎲"
+                  : isResolving
+                    ? "⚙️"
+                    : isResult
+                      ? "📜"
+                      : "🌙"}
               </div>
-            </section>
 
-            {/* PLAYERS */}
+              <h2 className="text-xl font-black">
+                {isGenerating
+                  ? isVietnamese
+                    ? "Đang tạo sự kiện..."
+                    : "Generating event..."
+                  : isResolving
+                    ? isVietnamese
+                      ? "Đang xử lý lựa chọn..."
+                      : "Resolving choices..."
+                  : isResult
+                    ? isVietnamese
+                      ? "Đang chuẩn bị kết quả..."
+                      : "Preparing result..."
+                  : isFinished
+                    ? isVietnamese
+                      ? "Trận đấu đã hoàn tất"
+                      : "Game finished"
+                  : isVietnamese
+                    ? "Đang chờ..."
+                    : "Waiting..."}
+              </h2>
 
-            <section
-              className={`mt-4 overflow-hidden rounded-2xl border ${cardClass}`}
-            >
+              <p
+                className={`mt-3 text-sm leading-6 ${mutedClass}`}
+              >
+                {isGenerating ||
+                isResolving
+                  ? isVietnamese
+                    ? "Hệ thống đang đồng bộ trạng thái giữa những người chơi."
+                    : "The system is synchronizing the game state between players."
+                  : ""}
+              </p>
+
+              {(isGenerating ||
+                isResolving) && (
+                <div className="mx-auto mt-6 h-1.5 max-w-xs overflow-hidden rounded-full bg-current/10">
+                  <div className="h-full w-1/2 animate-pulse rounded-full bg-[#d6bd72]" />
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* GOAL */}
+
+        <section
+          className={`mt-4 rounded-2xl border px-4 py-4 ${cardClass}`}
+        >
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p
+                className={`text-[8px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+              >
+                {isVietnamese
+                  ? "MỤC TIÊU"
+                  : "GOAL"}
+              </p>
+
+              <p className="mt-1 truncate text-sm font-black">
+                {goalMoney}
+              </p>
+            </div>
+
+            <div className="shrink-0 text-right">
+              <p
+                className={`text-[8px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+              >
+                ROOM
+              </p>
+
+              <p className="mt-1 font-mono text-xs font-black tracking-widest">
+                {code}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* PLAYERS */}
+
+        <section
+          className={`mt-4 overflow-hidden rounded-2xl border ${cardClass}`}
+        >
+          <button
+            type="button"
+            onClick={() =>
+              setPlayersOpen(true)
+            }
+            className="flex min-h-[64px] w-full items-center justify-between gap-4 px-4 text-left"
+          >
+            <div className="min-w-0">
+              <p
+                className={`text-[8px] font-black uppercase tracking-[0.25em] ${mutedClass}`}
+              >
+                NGƯỜI CHƠI
+              </p>
+
+              <p className="mt-1 truncate text-sm font-black">
+                {totalPlayers}{" "}
+                {isVietnamese
+                  ? "người tham gia"
+                  : "players"}
+              </p>
+            </div>
+
+            <span className="shrink-0 text-lg">
+              →
+            </span>
+          </button>
+        </section>
+
+        {error && (
+          <div className="mt-4 rounded-2xl border border-[#795047] bg-[#291d1a] px-4 py-3 text-sm leading-6 text-[#d7bbb1]">
+            <div className="flex items-start gap-3">
+              <span>⚠️</span>
+
+              <p className="min-w-0 flex-1 break-words">
+                {error}
+              </p>
+
               <button
                 type="button"
                 onClick={() =>
-                  setPlayersOpen(
-                    (value) =>
-                      !value
-                  )
+                  setError("")
                 }
-                className="flex min-h-[64px] w-full items-center justify-between gap-4 px-4 text-left"
+                className="shrink-0 opacity-60 transition hover:opacity-100"
               >
-                <div className="min-w-0">
+                ×
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* MOBILE PLAYERS BOTTOM SHEET */}
+
+      {playersOpen && (
+        <div className="fixed inset-0 z-[80] md:hidden">
+          <button
+            type="button"
+            aria-label="Close players"
+            onClick={() =>
+              setPlayersOpen(false)
+            }
+            className="absolute inset-0 bg-black/50 backdrop-blur-[2px]"
+          />
+
+          <div
+            className={`absolute inset-x-0 bottom-0 max-h-[75dvh] overflow-hidden rounded-t-[28px] border-t ${cardClass} shadow-2xl`}
+          >
+            <div className="mx-auto w-full max-w-lg">
+              <div className="flex items-center justify-between px-5 pb-3 pt-4">
+                <div>
                   <p
                     className={`text-[8px] font-black uppercase tracking-[0.25em] ${mutedClass}`}
                   >
-                    NGƯỜI CHƠI
+                    PLAYERS
                   </p>
 
-                  <p className="mt-1 truncate text-sm font-black">
+                  <p className="mt-1 text-base font-black">
                     {totalPlayers}{" "}
                     {isVietnamese
                       ? "người tham gia"
@@ -2050,739 +2236,770 @@ export default function GamePage() {
                   </p>
                 </div>
 
-                <span className="shrink-0 text-lg">
-                  {playersOpen
-                    ? "⌃"
-                    : "⌄"}
-                </span>
-              </button>
-
-              {playersOpen && (
-                <div className="border-t border-current/10">
-                  {otherPlayers.length ===
-                  0 ? (
-                    <div
-                      className={`px-4 py-6 text-center text-sm ${mutedClass}`}
-                    >
-                      {isVietnamese
-                        ? "Chưa có người chơi khác."
-                        : "No other players."}
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-current/10">
-                      {otherPlayers.map(
-                        (player) => (
-                          <div
-                            key={
-                              player.id
-                            }
-                            className="flex items-center justify-between gap-3 px-4 py-4"
-                          >
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <p className="truncate text-sm font-black">
-                                  {
-                                    player.player_name
-                                  }
-                                </p>
-
-                                <span
-                                  className={[
-                                    "h-2 w-2 shrink-0 rounded-full",
-                                    player.is_connected
-                                      ? "bg-[#8c9363]"
-                                      : "bg-[#777166]",
-                                  ].join(
-                                    " "
-                                  )}
-                                />
-                              </div>
-
-                              <p
-                                className={`mt-1 truncate text-xs ${mutedClass}`}
-                              >
-                                📍{" "}
-                                {player.location ||
-                                  "Việt Nam"}
-                              </p>
-                            </div>
-
-                            <div className="shrink-0 text-right">
-                              <p className="text-xs font-black">
-                                {formatMoney(
-                                  player.money
-                                )}
-                              </p>
-
-                              <p
-                                className={`mt-1 text-[10px] ${mutedClass}`}
-                              >
-                                ❤️{" "}
-                                {toNumber(
-                                  player.hp,
-                                  0
-                                )}
-                              </p>
-                            </div>
-                          </div>
-                        )
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </section>
-
-            {/* ERROR */}
-
-            {error && (
-              <div className="mt-4 rounded-2xl border border-[#795047] bg-[#291d1a] px-4 py-3 text-sm leading-6 text-[#d7bbb1]">
-                <div className="flex items-start gap-3">
-                  <span>⚠️</span>
-
-                  <p className="min-w-0 flex-1 break-words">
-                    {error}
-                  </p>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setError("")
-                    }
-                    className="shrink-0 opacity-60 transition hover:opacity-100"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* MOBILE BOTTOM NAV */}
-
-          <nav
-            className={[
-              "fixed inset-x-0 bottom-0 z-50",
-              "border-t backdrop-blur-xl",
-              isDark
-                ? "border-[#37342e] bg-[#12110f]/95"
-                : "border-[#d7d0c4] bg-[#eee9df]/95",
-            ].join(" ")}
-          >
-            <div className="mx-auto grid h-[68px] max-w-lg grid-cols-3">
-              <button
-                type="button"
-                className="flex flex-col items-center justify-center gap-1 opacity-70 active:scale-95"
-              >
-                <span className="text-lg">
-                  🎒
-                </span>
-
-                <span
-                  className={`text-[9px] font-black uppercase tracking-wider ${mutedClass}`}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPlayersOpen(
+                      false
+                    )
+                  }
+                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-current/10 text-xl"
                 >
-                  {isVietnamese
-                    ? "Đồ"
-                    : "Items"}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                className="flex flex-col items-center justify-center gap-1 opacity-70 active:scale-95"
-              >
-                <span className="text-lg">
-                  📜
-                </span>
-
-                <span
-                  className={`text-[9px] font-black uppercase tracking-wider ${mutedClass}`}
-                >
-                  Quest
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  setPlayersOpen(
-                    true
-                  )
-                }
-                className={[
-                  "flex flex-col items-center justify-center gap-1 active:scale-95",
-                  playersOpen
-                    ? "opacity-100"
-                    : "opacity-70",
-                ].join(" ")}
-              >
-                <span className="text-lg">
-                  👥
-                </span>
-
-                <span
-                  className={`text-[9px] font-black uppercase tracking-wider ${mutedClass}`}
-                >
-                  {isVietnamese
-                    ? "Phòng"
-                    : "Room"}
-                </span>
-              </button>
-            </div>
-          </nav>
-        </div>
-
-        {/* ==================================================
-            DESKTOP
-            ================================================== */}
-
-        <div className="hidden md:block">
-          <div className="mx-auto w-full max-w-5xl px-6 pb-28 pt-6 lg:px-8">
-            {/* TOP BAR */}
-
-            <header className="mb-5 flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() =>
-                  setPlayersOpen(
-                    (value) =>
-                      !value
-                  )
-                }
-                className={`rounded-2xl border px-4 py-3 text-left transition active:scale-[0.98] ${cardClass}`}
-              >
-                <p
-                  className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
-                >
-                  ROOM
-                </p>
-
-                <p className="mt-0.5 font-mono text-sm font-black tracking-widest">
-                  {code}
-                </p>
-              </button>
-
-              <div className="text-right">
-                <p
-                  className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
-                >
-                  ROUND
-                </p>
-
-                <p className="text-lg font-black">
-                  {game.session.round}
-                </p>
-              </div>
-            </header>
-
-            {/* GAME HEADER */}
-
-            <section
-              className={`overflow-hidden rounded-[28px] border ${cardClass}`}
-            >
-              <div className="border-b border-current/10 px-7 py-6">
-                <div className="flex items-end justify-between gap-4">
-                  <div className="min-w-0">
-                    <p
-                      className={`text-[10px] font-black uppercase tracking-[0.3em] ${mutedClass}`}
-                    >
-                      ĐƯỜNG BIÊN ĐÊM
-                    </p>
-
-                    <h1 className="mt-2 truncate text-4xl font-black tracking-tight">
-                      {game.event?.title ||
-                        (isGenerating
-                          ? "Đang tạo sự kiện..."
-                          : isResolving
-                            ? "Đang xử lý..."
-                            : "Hành trình")}
-                    </h1>
-                  </div>
-
-                  <div className="shrink-0 rounded-full border border-current/10 px-4 py-2">
-                    <span className="text-[10px] font-black tracking-[0.2em]">
-                      {phaseLabel}
-                    </span>
-                  </div>
-                </div>
+                  ×
+                </button>
               </div>
 
-              <div className="grid grid-cols-4 border-b border-current/10">
-                <div className="min-w-0 border-r border-current/10 px-4 py-5">
-                  <p
-                    className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+              <div className="max-h-[calc(75dvh-84px)] overflow-y-auto border-t border-current/10">
+                {otherPlayers.length ===
+                0 ? (
+                  <div
+                    className={`px-5 py-8 text-center text-sm ${mutedClass}`}
                   >
-                    NGƯỜI CHƠI
-                  </p>
-
-                  <p className="mt-1 truncate text-sm font-black">
-                    {currentPlayer?.playerName ||
-                      "—"}
-                  </p>
-                </div>
-
-                <div className="min-w-0 border-r border-current/10 px-4 py-5">
-                  <p
-                    className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
-                  >
-                    TIỀN
-                  </p>
-
-                  <p className="mt-1 truncate text-sm font-black">
-                    {currentPlayerMoney}
-                  </p>
-                </div>
-
-                <div className="border-r border-current/10 px-4 py-5">
-                  <p
-                    className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
-                  >
-                    HP
-                  </p>
-
-                  <p className="mt-1 text-sm font-black">
-                    ❤️ {currentPlayerHp}
-                  </p>
-                </div>
-
-                <div className="min-w-0 px-4 py-5">
-                  <p
-                    className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
-                  >
-                    VỊ TRÍ
-                  </p>
-
-                  <p className="mt-1 truncate text-sm font-black">
-                    📍{" "}
-                    {currentPlayer?.location ||
-                      "Việt Nam"}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between px-7 py-4">
-                <div>
-                  <p
-                    className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
-                  >
-                    MỤC TIÊU
-                  </p>
-
-                  <p className="mt-1 text-sm font-black">
-                    {goalMoney}
-                  </p>
-                </div>
-
-                <div className="text-right">
-                  <p
-                    className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
-                  >
-                    VÒNG
-                  </p>
-
-                  <p className="mt-1 text-sm font-black">
-                    {game.session.round}
-                  </p>
-                </div>
-              </div>
-            </section>
-
-            {/* DESKTOP EVENT */}
-
-            <section
-              className={`mt-5 overflow-hidden rounded-[28px] border ${cardClass}`}
-            >
-              {game.event ? (
-                <>
-                  <div className="px-7 pb-5 pt-6">
-                    <div className="mb-4 flex items-center gap-2">
-                      <span className="rounded-full bg-[#d6bd72]/15 px-3 py-1 text-[9px] font-black uppercase tracking-[0.2em] text-[#b69c57]">
-                        {game.event.event_type ||
-                          "EVENT"}
-                      </span>
-
-                      <span
-                        className={`text-[10px] font-bold ${mutedClass}`}
-                      >
-                        ROUND{" "}
-                        {
-                          game.event
-                            .round
-                        }
-                      </span>
-                    </div>
-
-                    <h2 className="text-3xl font-black leading-tight">
-                      {game.event.title}
-                    </h2>
-
-                    <p
-                      className={`mt-4 whitespace-pre-line text-sm leading-7 ${mutedClass}`}
-                    >
-                      {
-                        game.event
-                          .description
-                      }
-                    </p>
+                    {isVietnamese
+                      ? "Chưa có người chơi khác."
+                      : "No other players."}
                   </div>
-
-                  <div className="border-t border-current/10 p-5">
-                    <div className="space-y-3">
-                      {game.event.choices.map(
-                        (
-                          choice,
-                          index
-                        ) => {
-                          const isSelected =
-                            selectedChoiceId ===
-                            choice.id;
-
-                          return (
-                            <button
-                              key={
-                                choice.id
-                              }
-                              type="button"
-                              disabled={
-                                !isChoosing ||
-                                hasSelected ||
-                                submitting
-                              }
-                              onClick={() =>
-                                choose(
-                                  choice.id
-                                )
-                              }
-                              className={[
-                                "group w-full rounded-2xl border p-4 text-left transition",
-                                "active:scale-[0.99]",
-                                isSelected
-                                  ? "border-[#d6bd72] bg-[#d6bd72]/10"
-                                  : "border-current/10 hover:border-[#d6bd72]/50",
-                              ].join(
-                                " "
-                              )}
-                            >
-                              <div className="flex gap-4">
-                                <div
-                                  className={[
-                                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border text-sm font-black",
-                                    isSelected
-                                      ? "border-[#d6bd72] bg-[#d6bd72] text-[#171613]"
-                                      : "border-current/10",
-                                  ].join(
-                                    " "
-                                  )}
-                                >
-                                  {getChoiceLetter(
-                                    index
-                                  )}
-                                </div>
-
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-sm font-black leading-6">
-                                    {getChoiceText(
-                                      choice
-                                    )}
-                                  </p>
-
-                                  {typeof choice.description ===
-                                    "string" &&
-                                    choice.text &&
-                                    choice.description !==
-                                      choice.text && (
-                                      <p
-                                        className={`mt-1 text-xs leading-5 ${mutedClass}`}
-                                      >
-                                        {
-                                          choice.description
-                                        }
-                                      </p>
-                                    )}
-                                </div>
-
-                                {isSelected && (
-                                  <span className="text-lg">
-                                    ✓
-                                  </span>
-                                )}
-                              </div>
-                            </button>
-                          );
-                        }
-                      )}
-                    </div>
-
-                    {isChoosing && (
-                      <div className="mt-5">
-                        <div className="mb-2 flex items-center justify-between">
-                          <span
-                            className={`text-[10px] font-black uppercase tracking-[0.15em] ${mutedClass}`}
-                          >
-                            TIẾN ĐỘ LỰA CHỌN
-                          </span>
-
-                          <span className="text-xs font-black">
-                            {
-                              progressText
-                            }
-                          </span>
-                        </div>
-
-                        <div className="h-2 overflow-hidden rounded-full bg-current/10">
-                          <div
-                            className="h-full rounded-full bg-[#d6bd72] transition-all"
-                            style={{
-                              width: `${choiceProgressPercent}%`,
-                            }}
-                          />
-                        </div>
-
-                        {hasSelected && (
-                          <p
-                            className={`mt-3 text-center text-xs ${mutedClass}`}
-                          >
-                            {isVietnamese
-                              ? "Đã ghi nhận lựa chọn. Đang chờ người chơi còn lại..."
-                              : "Choice recorded. Waiting for the other players..."}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <div className="px-6 py-14 text-center">
-                  <div className="mb-4 text-4xl">
-                    {isGenerating
-                      ? "🎲"
-                      : isResolving
-                        ? "⚙️"
-                        : isResult
-                          ? "📜"
-                          : "🌙"}
-                  </div>
-
-                  <h2 className="text-xl font-black">
-                    {isGenerating
-                      ? isVietnamese
-                        ? "Đang tạo sự kiện..."
-                        : "Generating event..."
-                      : isResolving
-                        ? isVietnamese
-                          ? "Đang xử lý lựa chọn..."
-                          : "Resolving choices..."
-                        : isResult
-                          ? isVietnamese
-                            ? "Đang chuẩn bị kết quả..."
-                            : "Preparing result..."
-                          : isFinished
-                            ? isVietnamese
-                              ? "Trận đấu đã hoàn tất"
-                              : "Game finished"
-                            : isVietnamese
-                              ? "Đang chờ..."
-                              : "Waiting..."}
-                  </h2>
-                </div>
-              )}
-            </section>
-
-            {/* DESKTOP PLAYERS */}
-
-            <section
-              className={`mt-5 overflow-hidden rounded-[28px] border ${cardClass}`}
-            >
-              <button
-                type="button"
-                onClick={() =>
-                  setPlayersOpen(
-                    (value) =>
-                      !value
-                  )
-                }
-                className="flex w-full items-center justify-between px-7 py-5 text-left"
-              >
-                <div>
-                  <p
-                    className={`text-[9px] font-black uppercase tracking-[0.25em] ${mutedClass}`}
-                  >
-                    NGƯỜI CHƠI
-                  </p>
-
-                  <p className="mt-1 text-sm font-black">
-                    {totalPlayers} người tham gia
-                  </p>
-                </div>
-
-                <span className="text-lg">
-                  {playersOpen
-                    ? "⌃"
-                    : "⌄"}
-                </span>
-              </button>
-
-              {playersOpen && (
-                <div className="border-t border-current/10">
-                  {otherPlayers.length ===
-                  0 ? (
-                    <div
-                      className={`px-7 py-6 text-center text-sm ${mutedClass}`}
-                    >
-                      Chưa có người chơi khác.
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-current/10">
-                      {otherPlayers.map(
-                        (player) => (
-                          <div
-                            key={
-                              player.id
-                            }
-                            className="flex items-center justify-between gap-4 px-7 py-4"
-                          >
-                            <div className="min-w-0">
+                ) : (
+                  <div className="divide-y divide-current/10">
+                    {otherPlayers.map(
+                      (player) => (
+                        <div
+                          key={
+                            player.id
+                          }
+                          className="flex items-center justify-between gap-3 px-5 py-4"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
                               <p className="truncate text-sm font-black">
                                 {
                                   player.player_name
                                 }
                               </p>
 
-                              <p
-                                className={`mt-1 truncate text-xs ${mutedClass}`}
-                              >
-                                📍{" "}
-                                {player.location ||
-                                  "Việt Nam"}
-                              </p>
+                              <span
+                                className={`h-2 w-2 shrink-0 rounded-full ${
+                                  player.is_connected
+                                    ? "bg-[#8c9363]"
+                                    : "bg-[#777166]"
+                                }`}
+                              />
                             </div>
 
-                            <div className="shrink-0 text-right">
-                              <p className="text-xs font-black">
-                                {formatMoney(
-                                  player.money
-                                )}
-                              </p>
-
-                              <p
-                                className={`mt-1 text-[10px] ${mutedClass}`}
-                              >
-                                ❤️{" "}
-                                {toNumber(
-                                  player.hp,
-                                  0
-                                )}
-                              </p>
-                            </div>
+                            <p
+                              className={`mt-1 truncate text-xs ${mutedClass}`}
+                            >
+                              📍{" "}
+                              {player.location ||
+                                "Việt Nam"}
+                            </p>
                           </div>
-                        )
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </section>
 
-            {error && (
-              <div className="mt-5 rounded-2xl border border-[#795047] bg-[#291d1a] px-4 py-3 text-sm leading-6 text-[#d7bbb1]">
-                <div className="flex items-start gap-3">
-                  <span>⚠️</span>
+                          <div className="shrink-0 text-right">
+                            <p className="text-xs font-black">
+                              {formatMoney(
+                                player.money
+                              )}
+                            </p>
 
-                  <p className="min-w-0 flex-1 break-words">
-                    {error}
-                  </p>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setError("")
-                    }
-                    className="shrink-0"
-                  >
-                    ×
-                  </button>
-                </div>
+                            <p
+                              className={`mt-1 text-[10px] ${mutedClass}`}
+                            >
+                              ❤️{" "}
+                              {toNumber(
+                                player.hp,
+                                0
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      )
+                    )}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
         </div>
-      </main>
+      )}
 
-      {/* ==================================================
-          DEVELOPER NOTIFICATION
-          ================================================== */}
+      {/* MOBILE BOTTOM NAV */}
 
-      {developerNotificationVisible &&
-        developerNotification && (
-          <div className="pointer-events-none fixed inset-x-3 top-4 z-[9000] flex justify-center sm:inset-x-4">
-            <div className="pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-2xl border border-[#6b5b39] bg-[#211e18]/95 px-4 py-3 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#d6bd72] text-[#171613]">
-                ⚙
-              </div>
+      <nav
+        className={[
+          "fixed inset-x-0 bottom-0 z-50",
+          "border-t backdrop-blur-xl",
+          isDark
+            ? "border-[#37342e] bg-[#12110f]/95"
+            : "border-[#d7d0c4] bg-[#eee9df]/95",
+        ].join(" ")}
+      >
+        <div className="mx-auto grid h-[68px] max-w-lg grid-cols-3">
+          <button
+            type="button"
+            className="flex flex-col items-center justify-center gap-1 opacity-70 active:scale-95"
+          >
+            <span className="text-lg">
+              🎒
+            </span>
 
-              <div className="min-w-0 flex-1">
-                <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[#d6bd72]">
-                  DEVELOPER
+            <span
+              className={`text-[9px] font-black uppercase tracking-wider ${mutedClass}`}
+            >
+              {isVietnamese
+                ? "Đồ"
+                : "Items"}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="flex flex-col items-center justify-center gap-1 opacity-70 active:scale-95"
+          >
+            <span className="text-lg">
+              📜
+            </span>
+
+            <span
+              className={`text-[9px] font-black uppercase tracking-wider ${mutedClass}`}
+            >
+              Quest
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              setPlayersOpen(
+                true
+              )
+            }
+            className={[
+              "flex flex-col items-center justify-center gap-1 active:scale-95",
+              playersOpen
+                ? "opacity-100"
+                : "opacity-70",
+            ].join(" ")}
+          >
+            <span className="text-lg">
+              👥
+            </span>
+
+            <span
+              className={`text-[9px] font-black uppercase tracking-wider ${mutedClass}`}
+            >
+              {isVietnamese
+                ? "Phòng"
+                : "Room"}
+            </span>
+          </button>
+        </div>
+      </nav>
+    </div>
+
+    {/* ==================================================
+        DESKTOP
+        ================================================== */}
+
+    <div className="hidden md:block">
+      <div className="mx-auto w-full max-w-5xl px-6 pb-28 pt-6 lg:px-8">
+        <header className="mb-5 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() =>
+              setPlayersOpen(
+                (value) =>
+                  !value
+              )
+            }
+            className={`rounded-2xl border px-4 py-3 text-left transition active:scale-[0.98] ${cardClass}`}
+          >
+            <p
+              className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+            >
+              ROOM
+            </p>
+
+            <p className="mt-0.5 font-mono text-sm font-black tracking-widest">
+              {code}
+            </p>
+          </button>
+
+          <div className="text-right">
+            <p
+              className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+            >
+              ROUND
+            </p>
+
+            <p className="text-lg font-black">
+              {game.session.round}
+            </p>
+          </div>
+        </header>
+
+        <section
+          className={`overflow-hidden rounded-[28px] border ${cardClass}`}
+        >
+          <div className="border-b border-current/10 px-7 py-6">
+            <div className="flex items-end justify-between gap-4">
+              <div className="min-w-0">
+                <p
+                  className={`text-[10px] font-black uppercase tracking-[0.3em] ${mutedClass}`}
+                >
+                  ĐƯỜNG BIÊN ĐÊM
                 </p>
 
-                <p className="mt-1 break-words text-sm font-bold leading-5 text-[#eee7d9]">
+                <h1 className="mt-2 truncate text-4xl font-black tracking-tight">
+                  {game.event?.title ||
+                    (isShopRound
+                      ? isVietnamese
+                        ? "Cửa hàng"
+                        : "Shop"
+                      : isGenerating
+                        ? "Đang tạo sự kiện..."
+                        : isResolving
+                          ? "Đang xử lý..."
+                          : "Hành trình")}
+                </h1>
+              </div>
+
+              <div className="shrink-0 rounded-full border border-current/10 px-4 py-2">
+                <span className="text-[10px] font-black tracking-[0.2em]">
+                  {phaseLabel}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 border-b border-current/10">
+            <div className="min-w-0 border-r border-current/10 px-4 py-5">
+              <p
+                className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+              >
+                NGƯỜI CHƠI
+              </p>
+
+              <p className="mt-1 truncate text-sm font-black">
+                {currentPlayer?.playerName ||
+                  "—"}
+              </p>
+            </div>
+
+            <div className="min-w-0 border-r border-current/10 px-4 py-5">
+              <p
+                className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+              >
+                TIỀN
+              </p>
+
+              <p className="mt-1 truncate text-sm font-black">
+                {currentPlayerMoney}
+              </p>
+            </div>
+
+            <div className="border-r border-current/10 px-4 py-5">
+              <p
+                className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+              >
+                HP
+              </p>
+
+              <p className="mt-1 text-sm font-black">
+                ❤️ {currentPlayerHp}
+              </p>
+
+              <div className="mt-2 h-1.5 w-full max-w-[120px] overflow-hidden rounded-full bg-current/10">
+                <div
+                  className="h-full rounded-full bg-[#8c9363] transition-all duration-300"
+                  style={{
+                    width: `${currentPlayerHp}%`,
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="min-w-0 px-4 py-5">
+              <p
+                className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+              >
+                VỊ TRÍ
+              </p>
+
+              <p className="mt-1 truncate text-sm font-black">
+                📍{" "}
+                {currentPlayer?.location ||
+                  "Việt Nam"}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between px-7 py-4">
+            <div>
+              <p
+                className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+              >
+                MỤC TIÊU
+              </p>
+
+              <p className="mt-1 text-sm font-black">
+                {goalMoney}
+              </p>
+            </div>
+
+            <div className="text-right">
+              <p
+                className={`text-[9px] font-black uppercase tracking-[0.2em] ${mutedClass}`}
+              >
+                VÒNG
+              </p>
+
+              <p className="mt-1 text-sm font-black">
+                {game.session.round}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* DESKTOP EVENT / SHOP */}
+
+        <section
+          className={`mt-5 overflow-hidden rounded-[28px] border ${cardClass}`}
+        >
+          {isShopRound ? (
+            <div className="px-7 py-16 text-center">
+              <div className="mb-4 text-6xl">
+                🛒
+              </div>
+
+              <p className="text-[10px] font-black uppercase tracking-[0.3em] text-[#b69c57]">
+                SHOP
+              </p>
+
+              <h2 className="mt-2 text-3xl font-black">
+                {isVietnamese
+                  ? "CỬA HÀNG SẴN SÀNG"
+                  : "SHOP READY"}
+              </h2>
+
+              <p
+                className={`mx-auto mt-3 max-w-lg text-sm leading-7 ${mutedClass}`}
+              >
+                {isVietnamese
+                  ? "Cửa hàng chưa bắt đầu. Bấm vào nút bên dưới để mở Shop và bắt đầu 85 giây mua sắm."
+                  : "The shop has not started yet. Enter the shop below to start the 85-second shopping timer."}
+              </p>
+
+              <button
+                type="button"
+                onClick={() => void openShop()}
+                className="mt-8 rounded-2xl border border-[#b69c57]/40 bg-[#b69c57]/10 px-8 py-4 text-xs font-black uppercase tracking-[0.15em] text-[#b69c57] transition hover:bg-[#b69c57]/15 active:scale-[0.98]"
+              >
+                {isVietnamese
+                  ? "VÀO CỬA HÀNG"
+                  : "ENTER SHOP"}
+              </button>
+
+              <p
+                className={`mt-4 text-[10px] leading-5 ${mutedClass}`}
+              >
+                {isVietnamese
+                  ? `Vòng ${currentRound} · Đồng hồ chỉ bắt đầu khi bạn bấm Vào cửa hàng.`
+                  : `Round ${currentRound} · The timer starts only when you enter the shop.`}
+              </p>
+            </div>
+          ) : game.event ? (
+            <>
+              <div className="px-7 pb-5 pt-6">
+                <div className="mb-4 flex items-center gap-2">
+                  <span className="rounded-full bg-[#d6bd72]/15 px-3 py-1 text-[9px] font-black uppercase tracking-[0.2em] text-[#b69c57]">
+                    {game.event.event_type ||
+                      "EVENT"}
+                  </span>
+
+                  <span
+                    className={`text-[10px] font-bold ${mutedClass}`}
+                  >
+                    ROUND{" "}
+                    {
+                      game.event
+                        .round
+                    }
+                  </span>
+                </div>
+
+                <h2 className="text-3xl font-black leading-tight">
+                  {game.event.title}
+                </h2>
+
+                <p
+                  className={`mt-4 whitespace-pre-line text-sm leading-7 ${mutedClass}`}
+                >
                   {
-                    developerNotification
+                    game.event
+                      .description
                   }
                 </p>
               </div>
 
+              <div className="border-t border-current/10 p-5">
+                <div className="space-y-3">
+                  {game.event.choices.map(
+                    (
+                      choice,
+                      index
+                    ) => {
+                      const isSelected =
+                        selectedChoiceId ===
+                        choice.id;
+
+                      return (
+                        <button
+                          key={
+                            choice.id
+                          }
+                          type="button"
+                          disabled={
+                            !isChoosing ||
+                            hasSelected ||
+                            submitting
+                          }
+                          onClick={() =>
+                            choose(
+                              choice.id
+                            )
+                          }
+                          className={[
+                            "group w-full rounded-2xl border p-4 text-left transition",
+                            "active:scale-[0.99]",
+                            isSelected
+                              ? "border-[#d6bd72] bg-[#d6bd72]/10"
+                              : "border-current/10 hover:border-[#d6bd72]/50",
+                          ].join(
+                            " "
+                          )}
+                        >
+                          <div className="flex gap-4">
+                            <div
+                              className={[
+                                "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border text-sm font-black",
+                                isSelected
+                                  ? "border-[#d6bd72] bg-[#d6bd72] text-[#171613]"
+                                  : "border-current/10",
+                              ].join(
+                                " "
+                              )}
+                            >
+                              {getChoiceLetter(
+                                index
+                              )}
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-black leading-6">
+                                {getChoiceText(
+                                  choice
+                                )}
+                              </p>
+
+                              {typeof choice.description ===
+                                "string" &&
+                                choice.text &&
+                                choice.description !==
+                                  choice.text && (
+                                  <p
+                                    className={`mt-1 text-xs leading-5 ${mutedClass}`}
+                                  >
+                                    {
+                                      choice.description
+                                    }
+                                  </p>
+                                )}
+                            </div>
+
+                            {isSelected && (
+                              <span className="text-lg">
+                                ✓
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    }
+                  )}
+                </div>
+
+                {isChoosing && (
+                  <div className="mt-5">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span
+                        className={`text-[10px] font-black uppercase tracking-[0.15em] ${mutedClass}`}
+                      >
+                        TIẾN ĐỘ LỰA CHỌN
+                      </span>
+
+                      <span className="text-xs font-black">
+                        {
+                          progressText
+                        }
+                      </span>
+                    </div>
+
+                    <div className="h-2 overflow-hidden rounded-full bg-current/10">
+                      <div
+                        className="h-full rounded-full bg-[#d6bd72] transition-all"
+                        style={{
+                          width: `${choiceProgressPercent}%`,
+                        }}
+                      />
+                    </div>
+
+                    {hasSelected && (
+                      <p
+                        className={`mt-3 text-center text-xs ${mutedClass}`}
+                      >
+                        {isVietnamese
+                          ? "Đã ghi nhận lựa chọn. Đang chờ người chơi còn lại..."
+                          : "Choice recorded. Waiting for the other players..."}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="px-6 py-14 text-center">
+              <div className="mb-4 text-4xl">
+                {isGenerating
+                  ? "🎲"
+                  : isResolving
+                    ? "⚙️"
+                    : isResult
+                      ? "📜"
+                      : "🌙"}
+              </div>
+
+              <h2 className="text-xl font-black">
+                {isGenerating
+                  ? isVietnamese
+                    ? "Đang tạo sự kiện..."
+                    : "Generating event..."
+                  : isResolving
+                    ? isVietnamese
+                      ? "Đang xử lý lựa chọn..."
+                      : "Resolving choices..."
+                  : isResult
+                    ? isVietnamese
+                      ? "Đang chuẩn bị kết quả..."
+                      : "Preparing result..."
+                  : isFinished
+                    ? isVietnamese
+                      ? "Trận đấu đã hoàn tất"
+                      : "Game finished"
+                  : isVietnamese
+                    ? "Đang chờ..."
+                    : "Waiting..."}
+              </h2>
+            </div>
+          )}
+        </section>
+
+        {/* DESKTOP PLAYERS */}
+
+        <section
+          className={`mt-5 overflow-hidden rounded-[28px] border ${cardClass}`}
+        >
+          <button
+            type="button"
+            onClick={() =>
+              setPlayersOpen(
+                (value) =>
+                  !value
+              )
+            }
+            className="flex w-full items-center justify-between px-7 py-5 text-left"
+          >
+            <div>
+              <p
+                className={`text-[9px] font-black uppercase tracking-[0.25em] ${mutedClass}`}
+              >
+                NGƯỜI CHƠI
+              </p>
+
+              <p className="mt-1 text-sm font-black">
+                {totalPlayers} người tham gia
+              </p>
+            </div>
+
+            <span className="text-lg">
+              {playersOpen
+                ? "⌃"
+                : "⌄"}
+            </span>
+          </button>
+
+          {playersOpen && (
+            <div className="border-t border-current/10">
+              {otherPlayers.length ===
+              0 ? (
+                <div
+                  className={`px-7 py-6 text-center text-sm ${mutedClass}`}
+                >
+                  Chưa có người chơi khác.
+                </div>
+              ) : (
+                <div className="divide-y divide-current/10">
+                  {otherPlayers.map(
+                    (player) => (
+                      <div
+                        key={
+                          player.id
+                        }
+                        className="flex items-center justify-between gap-4 px-7 py-4"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black">
+                            {
+                              player.player_name
+                            }
+                          </p>
+
+                          <p
+                            className={`mt-1 truncate text-xs ${mutedClass}`}
+                          >
+                            📍{" "}
+                            {player.location ||
+                              "Việt Nam"}
+                          </p>
+                        </div>
+
+                        <div className="shrink-0 text-right">
+                          <p className="text-xs font-black">
+                            {formatMoney(
+                              player.money
+                            )}
+                          </p>
+
+                          <p
+                            className={`mt-1 text-[10px] ${mutedClass}`}
+                          >
+                            ❤️{" "}
+                            {toNumber(
+                              player.hp,
+                              0
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        {error && (
+          <div className="mt-5 rounded-2xl border border-[#795047] bg-[#291d1a] px-4 py-3 text-sm leading-6 text-[#d7bbb1]">
+            <div className="flex items-start gap-3">
+              <span>⚠️</span>
+
+              <p className="min-w-0 flex-1 break-words">
+                {error}
+              </p>
+
               <button
                 type="button"
                 onClick={() =>
-                  setDeveloperNotificationVisible(
-                    false
-                  )
+                  setError("")
                 }
-                className="shrink-0 px-1 text-xl leading-none text-[#aaa397] hover:text-white"
+                className="shrink-0"
               >
                 ×
               </button>
             </div>
           </div>
         )}
+      </div>
+    </div>
+  </main>
 
-      {/* ==================================================
-          END GAME OVERLAY
-          ================================================== */}
+  {/* ==================================================
+      DEVELOPER NOTIFICATION
+      ================================================== */}
 
-      <EndGameOverlay
-        visible={
-          developerWinOverlay !==
-          null
-            ? true
-            : undefined
-        }
-        forced={
-          developerWinOverlay !==
-          null
-            ? false
-            : undefined
-        }
-        message={
-          developerWinOverlay?.message
-        }
-        playerName={
-          developerWinOverlay?.playerName
-        }
-        money={
-          developerWinOverlay?.money
-        }
-        hp={
-          developerWinOverlay?.hp
-        }
-        location={
-          developerWinOverlay?.location
-        }
-        rounds={
-          developerWinOverlay?.rounds
-        }
-      />
-    </>
-  );
+  {developerNotificationVisible &&
+    developerNotification && (
+      <div className="pointer-events-none fixed inset-x-3 top-4 z-[9000] flex justify-center sm:inset-x-4">
+        <div className="pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-2xl border border-[#6b5b39] bg-[#211e18]/95 px-4 py-3 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#d6bd72] text-[#171613]">
+            ⚙
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[#d6bd72]">
+              DEVELOPER
+            </p>
+
+            <p className="mt-1 break-words text-sm font-bold leading-5 text-[#eee7d9]">
+              {
+                developerNotification
+              }
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              setDeveloperNotificationVisible(
+                false
+              )
+            }
+            className="shrink-0 px-1 text-xl leading-none text-[#aaa397] hover:text-white"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+    )}
+
+  {/* ==================================================
+      END GAME OVERLAY
+      ================================================== */}
+
+  <EndGameOverlay
+    visible={
+      developerWinOverlay !==
+      null
+        ? true
+        : undefined
+    }
+    forced={
+      developerWinOverlay !==
+      null
+        ? false
+        : undefined
+    }
+    message={
+      developerWinOverlay?.message
+    }
+    playerName={
+      developerWinOverlay?.playerName
+    }
+    money={
+      developerWinOverlay?.money
+    }
+    hp={
+      developerWinOverlay?.hp
+    }
+    location={
+      developerWinOverlay?.location
+    }
+    rounds={
+      developerWinOverlay?.rounds
+    }
+  />
+</>
+
+);
 }
