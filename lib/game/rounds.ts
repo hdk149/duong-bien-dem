@@ -31,10 +31,99 @@ export type GeneratedPlayerRoundEvent = {
 };
 
 export function isMoneyQuestRound(round: number): boolean {
+  return round > 0 && round % 5 === 0;
+}
+
+/* =====================================================
+   MONEY MAIN QUEST — SERVER-ONLY REWARD / JOB
+
+   This block is intentionally used ONLY by
+   money_main_quest. Normal events are untouched.
+   ===================================================== */
+
+const MONEY_QUEST_JOBS = [
+  "Phụ trách kiểm kê và sắp xếp kho hàng cho một cửa hàng lớn",
+  "Hỗ trợ vận hành một quầy hàng trong khu chợ địa phương",
+  "Làm ca ngắn tại một xưởng sửa chữa và phụ trách các việc phụ trợ",
+  "Hỗ trợ giao nhận thiết bị cho một sự kiện địa phương",
+  "Phụ trách đóng gói và kiểm tra hàng cho một cơ sở kinh doanh",
+  "Hỗ trợ một đội thi công trong công việc hậu cần tại công trường",
+  "Làm việc theo ca tại một quán ăn đang thiếu người",
+  "Hỗ trợ dọn dẹp và chuẩn bị một địa điểm tổ chức sự kiện",
+  "Phụ trách nhập dữ liệu và kiểm tra đơn hàng cho một cửa hàng",
+  "Hỗ trợ chăm sóc và vận hành một khu lưu trú nhỏ",
+  "Làm ca hỗ trợ kỹ thuật cơ bản cho một cửa hàng điện máy",
+  "Phụ trách chuẩn bị hàng hóa và bàn giao cho khách tại một điểm bán",
+];
+
+function randomMoneyQuestReward(): number {
   return (
-    round >= 6 &&
-    (round - 6) % 5 === 0
-  );
+    Math.floor(Math.random() * 31) + 20
+  ) * 1_000_000;
+}
+
+function pickMoneyQuestJob(
+  playerId: string,
+  round: number
+): string {
+  let hash = round * 31;
+
+  for (const char of playerId) {
+    hash =
+      (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+
+  return MONEY_QUEST_JOBS[
+    hash % MONEY_QUEST_JOBS.length
+  ]!;
+}
+
+function buildMoneyQuestServerData(
+  player: Player,
+  round: number
+) {
+  const reward =
+    randomMoneyQuestReward();
+
+  const job =
+    pickMoneyQuestJob(
+      player.id,
+      round
+    );
+
+  return {
+    reward,
+    job,
+  };
+}
+
+function injectMoneyQuestJob(
+  event: {
+    title: string;
+    description: string;
+    choices: unknown[];
+    type?: string;
+    event_type?: string;
+  },
+  job: string,
+  reward: number
+) {
+  const salaryText =
+    `${Math.round(reward / 1_000_000)}.000.000đ`;
+
+  const jobBlock =
+    `\n\nCÔNG VIỆC: ${job}\nTHÙ LAO: ${salaryText}`;
+
+  const description =
+    event.description.includes("CÔNG VIỆC:")
+      ? event.description
+      : `${event.description}${jobBlock}`;
+
+  return {
+    ...event,
+    description,
+    type: "money_main_quest",
+  };
 }
 
 function buildAIContext(
@@ -606,10 +695,27 @@ export async function generatePlayerRoundEvents(
             isMoneyQuestRound(round)
           );
 
-        const event =
+        const baseEvent =
           aiPlayerResult?.event
             ? aiPlayerResult.event
             : fallback;
+
+        const moneyQuestData =
+          isMoneyQuestRound(round)
+            ? buildMoneyQuestServerData(
+                player,
+                round
+              )
+            : null;
+
+        const event =
+          moneyQuestData
+            ? injectMoneyQuestJob(
+                baseEvent,
+                moneyQuestData.job,
+                moneyQuestData.reward
+              )
+            : baseEvent;
 
         return {
           room_id:
@@ -660,7 +766,18 @@ export async function generatePlayerRoundEvents(
            * because the event was generated.
            */
           result:
-            null,
+            moneyQuestData
+              ? {
+                  server_money_quest: {
+                    reward:
+                      moneyQuestData.reward,
+                    job:
+                      moneyQuestData.job,
+                    reward_status:
+                      "pending",
+                  },
+                }
+              : null,
 
           status:
             "pending",
