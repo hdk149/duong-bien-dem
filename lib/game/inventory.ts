@@ -72,12 +72,7 @@ export type AddItemInput = {
   playerId: string;
   itemId: string;
   quantity?: number;
-
-  /**
-   * What caused the item to enter inventory.
-   */
   action?: "purchase" | "reward" | "admin_add";
-
   source?: string | null;
   referenceId?: string | null;
   metadata?: Record<string, unknown>;
@@ -88,9 +83,7 @@ export type RemoveItemInput = {
   playerId: string;
   itemId: string;
   quantity?: number;
-
   action?: "use" | "consume" | "remove" | "admin_remove";
-
   source?: string | null;
   referenceId?: string | null;
   metadata?: Record<string, unknown>;
@@ -105,19 +98,30 @@ function assertPositiveInteger(
   name: string,
 ): void {
   if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(
-      `${name} must be a positive integer.`,
-    );
+    throw new Error(`${name} must be a positive integer.`);
   }
+}
+
+function mapInventoryRow(
+  row: any,
+  item: ItemDefinition | null,
+): InventoryItem {
+  return {
+    id: row.id,
+    room_id: row.room_id,
+    player_id: row.player_id,
+    item_id: row.item_id,
+    quantity: row.quantity,
+    acquired_at: row.acquired_at,
+    updated_at: row.updated_at,
+    item,
+  };
 }
 
 /* =========================================================
    ITEM DEFINITIONS
 ========================================================= */
 
-/**
- * Get one item definition.
- */
 export async function getItemDefinition(
   itemId: string,
 ): Promise<ItemDefinition | null> {
@@ -150,11 +154,6 @@ export async function getItemDefinition(
   return data as ItemDefinition | null;
 }
 
-/**
- * Get all item definitions.
- *
- * Useful for Shop.
- */
 export async function getItemDefinitions(): Promise<
   ItemDefinition[]
 > {
@@ -193,23 +192,74 @@ export async function getItemDefinitions(): Promise<
 
 /**
  * Get complete inventory for one player in one room.
+ *
+ * IMPORTANT:
+ * Do not use a nested PostgREST relation here.
+ * We fetch inventory rows first and item definitions separately.
+ *
+ * This avoids failures when Supabase has not refreshed /
+ * exposed the FK relationship between player_inventory
+ * and item_definitions correctly.
  */
 export async function getInventory(
   roomId: string,
   playerId: string,
 ): Promise<InventoryItem[]> {
-  const { data, error } = await supabase
-    .from("player_inventory")
-    .select(
-      `
-        id,
-        room_id,
-        player_id,
-        item_id,
-        quantity,
-        acquired_at,
-        updated_at,
-        item_definitions (
+  const { data: rows, error: inventoryError } =
+    await supabase
+      .from("player_inventory")
+      .select(
+        `
+          id,
+          room_id,
+          player_id,
+          item_id,
+          quantity,
+          acquired_at,
+          updated_at
+        `,
+      )
+      .eq("room_id", roomId)
+      .eq("player_id", playerId)
+      .order("acquired_at", {
+        ascending: true,
+      });
+
+  if (inventoryError) {
+    throw new Error(
+      `Failed to get inventory rows: ${inventoryError.message}`,
+    );
+  }
+
+  const inventoryRows = rows ?? [];
+
+  if (inventoryRows.length === 0) {
+    return [];
+  }
+
+  const itemIds = [
+    ...new Set(
+      inventoryRows
+        .map((row: any) => row.item_id)
+        .filter(
+          (itemId): itemId is string =>
+            typeof itemId === "string" &&
+            itemId.length > 0,
+        ),
+    ),
+  ];
+
+  if (itemIds.length === 0) {
+    return inventoryRows.map((row: any) =>
+      mapInventoryRow(row, null),
+    );
+  }
+
+  const { data: definitions, error: definitionsError } =
+    await supabase
+      .from("item_definitions")
+      .select(
+        `
           id,
           category,
           name,
@@ -221,31 +271,31 @@ export async function getInventory(
           stackable,
           spawn_weight,
           created_at
-        )
-      `,
-    )
-    .eq("room_id", roomId)
-    .eq("player_id", playerId)
-    .order("acquired_at", {
-      ascending: true,
-    });
+        `,
+      )
+      .in("id", itemIds);
 
-  if (error) {
+  if (definitionsError) {
     throw new Error(
-      `Failed to get inventory: ${error.message}`,
+      `Failed to get inventory item definitions: ${definitionsError.message}`,
     );
   }
 
-  return (data ?? []).map((row: any) => ({
-    id: row.id,
-    room_id: row.room_id,
-    player_id: row.player_id,
-    item_id: row.item_id,
-    quantity: row.quantity,
-    acquired_at: row.acquired_at,
-    updated_at: row.updated_at,
-    item: row.item_definitions ?? null,
-  }));
+  const definitionMap = new Map<string, ItemDefinition>();
+
+  for (const definition of definitions ?? []) {
+    definitionMap.set(
+      definition.id,
+      definition as ItemDefinition,
+    );
+  }
+
+  return inventoryRows.map((row: any) =>
+    mapInventoryRow(
+      row,
+      definitionMap.get(row.item_id) ?? null,
+    ),
+  );
 }
 
 /**
@@ -256,59 +306,38 @@ export async function getInventoryItem(
   playerId: string,
   itemId: string,
 ): Promise<InventoryItem | null> {
-  const { data, error } = await supabase
-    .from("player_inventory")
-    .select(
-      `
-        id,
-        room_id,
-        player_id,
-        item_id,
-        quantity,
-        acquired_at,
-        updated_at,
-        item_definitions (
+  const { data: row, error: inventoryError } =
+    await supabase
+      .from("player_inventory")
+      .select(
+        `
           id,
-          category,
-          name,
-          name_en,
-          description,
-          description_en,
-          price,
-          icon,
-          stackable,
-          spawn_weight,
-          created_at
-        )
-      `,
-    )
-    .eq("room_id", roomId)
-    .eq("player_id", playerId)
-    .eq("item_id", itemId)
-    .maybeSingle();
+          room_id,
+          player_id,
+          item_id,
+          quantity,
+          acquired_at,
+          updated_at
+        `,
+      )
+      .eq("room_id", roomId)
+      .eq("player_id", playerId)
+      .eq("item_id", itemId)
+      .maybeSingle();
 
-  if (error) {
+  if (inventoryError) {
     throw new Error(
-      `Failed to get inventory item: ${error.message}`,
+      `Failed to get inventory item: ${inventoryError.message}`,
     );
   }
 
-  if (!data) {
+  if (!row) {
     return null;
   }
 
-  const row: any = data;
+  const definition = await getItemDefinition(itemId);
 
-  return {
-    id: row.id,
-    room_id: row.room_id,
-    player_id: row.player_id,
-    item_id: row.item_id,
-    quantity: row.quantity,
-    acquired_at: row.acquired_at,
-    updated_at: row.updated_at,
-    item: row.item_definitions ?? null,
-  };
+  return mapInventoryRow(row, definition);
 }
 
 /**
@@ -349,9 +378,6 @@ export async function hasItem(
    INVENTORY LOG
 ========================================================= */
 
-/**
- * Write an inventory history record.
- */
 export async function logInventoryAction(
   input: InventoryLogInput,
 ): Promise<void> {
@@ -380,9 +406,6 @@ export async function logInventoryAction(
   }
 }
 
-/**
- * Get inventory history.
- */
 export async function getInventoryLog(
   roomId: string,
   playerId: string,
@@ -429,15 +452,6 @@ export async function getInventoryLog(
    ADD ITEM
 ========================================================= */
 
-/**
- * Add an item to inventory.
- *
- * Stackable:
- *   existing quantity + requested quantity
- *
- * Non-stackable:
- *   quantity is kept at 1
- */
 export async function addItem(
   input: AddItemInput,
 ): Promise<InventoryItem> {
@@ -497,10 +511,10 @@ export async function addItem(
       );
     }
 
-    inventoryItem = {
-      ...(data as Omit<InventoryItem, "item">),
-      item: definition,
-    };
+    inventoryItem = mapInventoryRow(
+      data,
+      definition,
+    );
   } else {
     const newQuantity = definition.stackable
       ? quantity
@@ -533,10 +547,10 @@ export async function addItem(
       );
     }
 
-    inventoryItem = {
-      ...(data as Omit<InventoryItem, "item">),
-      item: definition,
-    };
+    inventoryItem = mapInventoryRow(
+      data,
+      definition,
+    );
   }
 
   await logInventoryAction({
@@ -557,11 +571,6 @@ export async function addItem(
    REMOVE ITEM
 ========================================================= */
 
-/**
- * Remove an item from inventory.
- *
- * If quantity reaches 0, the inventory row is deleted.
- */
 export async function removeItem(
   input: RemoveItemInput,
 ): Promise<void> {
@@ -636,11 +645,6 @@ export async function removeItem(
    CONSUME ITEM
 ========================================================= */
 
-/**
- * Consume an item.
- *
- * Removes the item and creates a "consume" log.
- */
 export async function consumeItem(
   roomId: string,
   playerId: string,
@@ -668,12 +672,6 @@ export async function consumeItem(
    REUSABLE ITEM
 ========================================================= */
 
-/**
- * Record that an item was used without removing it.
- *
- * Useful for reusable equipment such as:
- * flashlight, backpack, compass, etc.
- */
 export async function logItemUse(
   roomId: string,
   playerId: string,

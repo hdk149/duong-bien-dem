@@ -4,19 +4,19 @@ import type {
   PlayerVote,
 } from "./types";
 
-import type {
-  PlayerStats,
-} from "./stats";
-
 import {
-  generateAIHostOutcomeGroq,
+  generateAIHostOutcome,
   generateAIHostNextEventsGroq,
   type AIOutcomeContext,
   type AIHostPlayerContext,
 } from "./ai/host";
 
 import type {
-  ValidatedAIOutcomeResponse,
+  AIEvent,
+  AIPlayerEffects,
+} from "./ai/schema";
+
+import type {
   ValidatedAIEventResponse,
 } from "./ai/validate";
 
@@ -25,9 +25,13 @@ import {
   type PlayerResultApplication,
 } from "./apply-player-result";
 
-/* =====================================================
-   PLAYER ROUND EVENT TYPE
-   ===================================================== */
+import type {
+  PlayerStats,
+} from "./stats";
+
+/* ============================================================
+   TYPES
+   ============================================================ */
 
 export type ResolvePlayerRoundEvent = {
   id: string;
@@ -37,507 +41,642 @@ export type ResolvePlayerRoundEvent = {
   description: string;
 
   event_type: string;
+  destination?: string | null;
 
-  destination:
-    | string
-    | null;
+  choices: unknown;
 
-  choices: unknown[];
+  selected_choice_id: string | null;
 
-  selected_choice_id:
-    | string
-    | null;
-
-  source_event_id:
-    | string
-    | null;
+  source_event_id?: string | null;
 };
-
-/* =====================================================
-   ROUND RESOLVER TYPES
-   ===================================================== */
 
 export type RoundResolveInput = {
   round: number;
 
-  /*
-   * Shared/source event.
-   *
-   * Kept for compatibility with the existing
-   * resolve route and result structure.
-   */
   event: EventData;
 
   players: Player[];
 
   votes: PlayerVote[];
 
-  /*
-   * The actual private event shown to each player.
-   *
-   * This is the event that must be used when resolving
-   * that player's choice.
-   */
   playerEvents: ResolvePlayerRoundEvent[];
+
+  roomId?: string;
+
+  sessionId?: string;
 };
 
-export type PlayerRoundResolveResult = {
+export type ResolvedPlayer = {
   player: Player;
 
   vote: PlayerVote;
 
-  playerEvent:
-    ResolvePlayerRoundEvent;
-
-  application:
-    PlayerResultApplication;
+  application: PlayerResultApplication;
 };
 
 export type RoundResolveResult = {
   round: number;
 
-  event: EventData;
+  players: ResolvedPlayer[];
 
-  players:
-    PlayerRoundResolveResult[];
+  aiResponse: unknown;
 
-  aiResponse:
-    ValidatedAIOutcomeResponse;
-
-  nextEvents:
-    ValidatedAIEventResponse;
+  nextEvents: ValidatedAIEventResponse;
 };
 
-/* =====================================================
-   GET PLAYER STATS
-   ===================================================== */
+/* ============================================================
+   HELPERS
+   ============================================================ */
 
 function getPlayerStats(
   player: Player
 ): PlayerStats {
   return {
-    hp:
-      player.hp,
+    hp: Number(player.hp ?? 100),
 
-    money:
-      player.money,
+    money: Number(
+      player.money ?? 0
+    ),
 
     location:
-      player.location,
+      player.location ??
+      "Việt Nam",
 
     legal_risk:
-      player.legal_risk,
+      Number(
+        player.legal_risk ?? 0
+      ),
   };
 }
 
-/* =====================================================
-   GET ROUNDS IN LOCATION
-   ===================================================== */
+/* ============================================================
+   LOCATION COUNTER
+   ============================================================ */
 
 function getRoundsInLocation(
-  player: Player
-): number {
-  return (
-    (
-      player as Player & {
-        rounds_in_location?: number;
-      }
-    ).rounds_in_location ?? 1
-  );
-}
+  players: Player[]
+): Map<string, number> {
+  const counts =
+    new Map<string, number>();
 
-/* =====================================================
-   NORMALIZE PRIVATE EVENT CHOICES
-   =====================================================
+  for (const player of players) {
+    const location =
+      player.location ??
+      "Việt Nam";
 
-   player_round_events currently stores choices as JSON.
-
-   Older fallback events use:
-
-     {
-       id,
-       title,
-       description
-     }
-
-   AI events use:
-
-     {
-       id,
-       text
-     }
-
-   The outcome AI only needs id + text.
-   ===================================================== */
-
-function normalizeChoices(
-  choices: unknown
-): {
-  id: string;
-  text: string;
-}[] {
-  if (!Array.isArray(choices)) {
-    throw new Error(
-      "Player event choices must be an array."
+    counts.set(
+      location,
+      (counts.get(location) ?? 0) + 1
     );
   }
 
+  return counts;
+}
+
+/* ============================================================
+   CHOICES
+   ============================================================ */
+
+function normalizeChoiceList(
+  choices: unknown
+): Array<{
+  id: string;
+  text: string;
+}> {
+  if (!Array.isArray(choices)) {
+    return [];
+  }
+
   return choices.map(
-    (
-      choice,
-      index
-    ) => {
-      if (
-        typeof choice !==
-          "object" ||
-        choice === null
-      ) {
-        throw new Error(
-          `Invalid choice at index ${index}.`
-        );
-      }
+    (choice: any) => ({
+      id: String(
+        choice?.id ?? ""
+      ),
 
-      const raw =
-        choice as Record<
-          string,
-          unknown
-        >;
-
-      const id =
-        typeof raw.id ===
-        "string"
-          ? raw.id
-          : "";
-
-      if (!id) {
-        throw new Error(
-          `Player event choice at index ${index} has no id.`
-        );
-      }
-
-      const text =
-        typeof raw.text ===
-        "string"
-          ? raw.text
-          : typeof raw.title ===
-              "string"
-            ? raw.title
-            : typeof raw.description ===
-                "string"
-              ? raw.description
-              : "";
-
-      if (!text) {
-        throw new Error(
-          `Player event choice ${id} has no text.`
-        );
-      }
-
-      return {
-        id,
-        text,
-      };
-    }
+      text: String(
+        choice?.text ??
+          choice?.title ??
+          choice?.description ??
+          ""
+      ),
+    })
   );
 }
 
-/* =====================================================
-   BUILD AI OUTCOME CONTEXT
-   ===================================================== */
+/* ============================================================
+   PRIVATE DB EVENT → AI EVENT
+   ============================================================ */
 
-function buildAIOutcomeContext(
-  round: number,
-  players: Player[],
-  playerEvents: ResolvePlayerRoundEvent[],
-  voteMap: Map<
-    string,
-    PlayerVote
-  >
-): AIOutcomeContext {
+function toAIEvent(
+  playerEvent: ResolvePlayerRoundEvent
+): AIEvent {
   return {
-    round,
+    title:
+      playerEvent.title,
 
-    players:
-      players.map(
-        (player) => {
-          const playerEvent =
-            playerEvents.find(
-              (event) =>
-                event.player_id ===
-                player.id
-            );
+    description:
+      playerEvent.description,
 
-          if (!playerEvent) {
-            throw new Error(
-              `Player event missing for ${player.id}.`
-            );
-          }
+    type:
+      playerEvent.event_type,
 
-          const vote =
-            voteMap.get(
-              player.id
-            );
+    destination:
+      playerEvent.destination ??
+      null,
 
-          if (!vote) {
-            throw new Error(
-              `Vote missing for ${player.id}.`
-            );
-          }
-
-          const choices =
-            normalizeChoices(
-              playerEvent.choices
-            );
-
-          const chosenChoice =
-            choices.find(
-              (choice) =>
-                choice.id ===
-                vote.choice_id
-            );
-
-          if (!chosenChoice) {
-            throw new Error(
-              `Choice ${vote.choice_id} does not exist in player event ${playerEvent.id}.`
-            );
-          }
-
-          return {
-            id:
-              player.id,
-
-            player_name:
-              player.player_name,
-
-            hp:
-              player.hp,
-
-            money:
-              player.money,
-
-            location:
-              player.location,
-
-            legal_risk:
-              player.legal_risk,
-
-            last_choice:
-              player.last_choice,
-
-            rounds_in_location:
-              getRoundsInLocation(
-                player
-              ),
-
-            event: {
-              title:
-                playerEvent.title,
-
-              description:
-                playerEvent.description,
-
-              type:
-                playerEvent.event_type,
-
-              destination:
-                playerEvent.destination ??
-                null,
-
-              choices,
-            },
-
-            chosen_choice_id:
-              chosenChoice.id,
-
-            chosen_choice_text:
-              chosenChoice.text,
-          };
-        }
+    choices:
+      normalizeChoiceList(
+        playerEvent.choices
       ),
   };
 }
 
-/* =====================================================
-   BUILD NEXT-ROUND AI CONTEXT
-   =====================================================
+/* ============================================================
+   MONEY PARSER
+   ============================================================ */
 
-   IMPORTANT:
+function parseVietnameseMoney(
+  value: string
+): number | null {
+  const text =
+    value
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
 
-   This MUST be built from the state AFTER the current
-   round's effects have been applied.
+  /*
+   * 2 triệu
+   * 2.5 triệu
+   * 2,5 triệu
+   * 2m
+   */
 
-   This is what prevents the AI from generating a
-   next-round event using the player's old location.
+  const millionMatch =
+    text.match(
+      /(\d+(?:[.,]\d+)?)\s*(?:triệu|trieu|m)\b/
+    );
 
-   Example:
+  if (millionMatch) {
+    const number =
+      Number(
+        millionMatch[1]
+          .replace(",", ".")
+      );
 
-     Round 6:
-       location = TP.HCM
-       choice = travel to Đà Lạt
-
-     server resolves:
-       location -> Đà Lạt
-
-     THEN:
-
-     Round 7 AI receives:
-       location = Đà Lạt
-
-   Not TP.HCM.
-   ===================================================== */
-
-function buildNextRoundPlayers(
-  round: number,
-  players: Player[],
-  resolvedPlayers: PlayerRoundResolveResult[]
-): AIHostPlayerContext[] {
-  return resolvedPlayers.map(
-    (resolved) => {
-      const originalPlayer =
-        players.find(
-          (player) =>
-            player.id ===
-            resolved.player.id
-        );
-
-      if (!originalPlayer) {
-        throw new Error(
-          `Original player ${resolved.player.id} not found while building next-round AI context.`
-        );
-      }
-
-      const after =
-        resolved.application.after;
-
-      const beforeLocation =
-        originalPlayer.location.trim();
-
-      const afterLocation =
-        after.location.trim();
-
-      const sameLocation =
-        beforeLocation ===
-        afterLocation;
-
-      const previousRounds =
-        getRoundsInLocation(
-          originalPlayer
-        );
-
-      const roundsInLocation =
-        sameLocation
-          ? previousRounds + 1
-          : 1;
-
-      return {
-        id:
-          originalPlayer.id,
-
-        player_name:
-          originalPlayer.player_name,
-
-        hp:
-          after.hp,
-
-        money:
-          after.money,
-
-        location:
-          after.location,
-
-        legal_risk:
-          after.legal_risk,
-
-        /*
-         * The choice that produced the current state
-         * becomes the latest choice for the next event
-         * generation.
-         */
-        last_choice:
-          resolved.vote.choice_id,
-
-        rounds_in_location:
-          roundsInLocation,
-      };
+    if (
+      Number.isFinite(number)
+    ) {
+      return Math.round(
+        number * 1_000_000
+      );
     }
+  }
+
+  /*
+   * 500 nghìn
+   * 500 ngàn
+   * 500k
+   */
+
+  const thousandMatch =
+    text.match(
+      /(\d+(?:[.,]\d+)?)\s*(?:nghìn|ngàn|k)\b/
+    );
+
+  if (thousandMatch) {
+    const number =
+      Number(
+        thousandMatch[1]
+          .replace(",", ".")
+      );
+
+    if (
+      Number.isFinite(number)
+    ) {
+      return Math.round(
+        number * 1_000
+      );
+    }
+  }
+
+  /*
+   * 2.000.000
+   * 2,000,000
+   * 2000000
+   */
+
+  const plainMatch =
+    text.match(
+      /(?:\d{1,3}(?:[.,]\d{3})+|\d{4,})/
+    );
+
+  if (plainMatch) {
+    const raw =
+      plainMatch[0]
+        .replace(/[.,]/g, "");
+
+    const number =
+      Number(raw);
+
+    if (
+      Number.isFinite(number)
+    ) {
+      return number;
+    }
+  }
+
+  return null;
+}
+
+/* ============================================================
+   EXTRACT PAYMENT
+   ============================================================ */
+
+function extractPaymentFromEvent(
+  event: AIEvent
+): number | null {
+  const text = [
+    event.title ?? "",
+    event.description ?? "",
+  ].join(" ");
+
+  return parseVietnameseMoney(
+    text
   );
 }
 
-/* =====================================================
-   BUILD SAFE NEXT EVENTS FALLBACK
-   ===================================================== */
+/* ============================================================
+   ECONOMIC SAFETY
+   ============================================================ */
 
-function buildFallbackNextEvents(
-  round: number,
-  resolvedPlayers: PlayerRoundResolveResult[]
-): ValidatedAIEventResponse {
-  return {
-    round:
-      round + 1,
+function applyEconomicSafety(
+  event: AIEvent,
+  selectedChoiceId: string,
+  effects: AIPlayerEffects
+): AIPlayerEffects {
+  const choice =
+    event.choices.find(
+      (item) =>
+        String(item.id) ===
+        String(selectedChoiceId)
+    );
 
-    players:
-      resolvedPlayers.map(
-        (resolved) => ({
-          player_id:
-            resolved.player.id,
+  const choiceText =
+    String(
+      choice?.text ?? ""
+    ).toLowerCase();
+
+  /*
+   * REFUSAL
+   */
+
+  const refusal =
+    /từ chối|không nhận|không làm|bỏ qua|rời đi/.test(
+      choiceText
+    );
+
+  if (refusal) {
+    return {
+      ...effects,
+      money: 0,
+    };
+  }
+
+  /*
+   * WORK ACCEPTANCE
+   */
+
+  const acceptingWork =
+    /chấp nhận việc|nhận việc|nhận lời mời làm việc|đồng ý làm việc|bắt đầu làm việc|đi làm|chấp nhận làm|chấp nhận công việc/.test(
+      choiceText
+    );
+
+  if (!acceptingWork) {
+    return effects;
+  }
+
+  /*
+   * AI đã trả tiền dương
+   */
+
+  if (
+    typeof effects.money ===
+      "number" &&
+    Number.isFinite(
+      effects.money
+    ) &&
+    effects.money > 0
+  ) {
+    console.log(
+      "ECONOMIC SAFETY → AI PAYMENT",
+      {
+        selectedChoiceId,
+        money:
+          effects.money,
+      }
+    );
+
+    return effects;
+  }
+
+  /*
+   * AI không trả tiền.
+   *
+   * Kiểm tra event có ghi mức thù lao
+   * hay không.
+   */
+
+  const payment =
+    extractPaymentFromEvent(
+      event
+    );
+
+  if (
+    payment !== null &&
+    payment > 0
+  ) {
+    console.warn(
+      "ECONOMIC SAFETY → RESTORED WORK PAYMENT",
+      {
+        selectedChoiceId,
+        payment,
+        eventTitle:
+          event.title,
+      }
+    );
+
+    return {
+      ...effects,
+      money:
+        payment,
+    };
+  }
+
+  /*
+   * Không tự bịa tiền.
+   */
+
+  console.warn(
+    "ECONOMIC SAFETY → WORK ACCEPTED BUT NO PAYMENT",
+    {
+      selectedChoiceId,
+      eventTitle:
+        event.title,
+
+      eventDescription:
+        event.description,
+
+      aiEffects:
+        effects,
+    }
+  );
+
+  return effects;
+}
+
+/* ============================================================
+   LOCATION SAFETY
+   ============================================================ */
+
+function applyLocationSafety(
+  current: PlayerStats,
+  effects: AIPlayerEffects
+): AIPlayerEffects {
+  if (
+    effects.location !==
+      undefined &&
+    typeof effects.location !==
+      "string"
+  ) {
+    return {
+      ...effects,
+
+      location:
+        current.location,
+    };
+  }
+
+  return effects;
+}
+
+/* ============================================================
+   AI HOST PLAYER CONTEXT
+   ============================================================ */
+
+function buildAIHostPlayers(
+  players: Player[],
+  locationCounts: Map<string, number>
+): AIHostPlayerContext[] {
+  return players.map(
+    (player) => ({
+      id:
+        player.id,
+
+      player_name:
+        player.player_name,
+
+      hp:
+        Number(
+          player.hp ?? 100
+        ),
+
+      money:
+        Number(
+          player.money ?? 0
+        ),
+
+      location:
+        player.location ??
+        "Việt Nam",
+
+      legal_risk:
+        Number(
+          player.legal_risk ?? 0
+        ),
+
+      rounds_in_location:
+        locationCounts.get(
+          player.location ??
+            "Việt Nam"
+        ) ?? 0,
+    })
+  );
+}
+
+/* ============================================================
+   OUTCOME CONTEXT
+   ============================================================ */
+
+function buildAIOutcomeContext(
+  input: RoundResolveInput
+): AIOutcomeContext {
+  const locationCounts =
+    getRoundsInLocation(
+      input.players
+    );
+
+  const playerMap =
+    new Map(
+      input.players.map(
+        (player) => [
+          player.id,
+          player,
+        ]
+      )
+    );
+
+  const voteMap =
+    new Map(
+      input.votes.map(
+        (vote) => [
+          vote.player_id,
+          vote,
+        ]
+      )
+    );
+
+  const outcomePlayers =
+    input.playerEvents.map(
+      (playerEvent) => {
+        const player =
+          playerMap.get(
+            playerEvent.player_id
+          );
+
+        if (!player) {
+          throw new Error(
+            `Không tìm thấy player ${playerEvent.player_id}.`
+          );
+        }
+
+        const vote =
+          voteMap.get(
+            playerEvent.player_id
+          );
+
+        if (!vote) {
+          throw new Error(
+            `Không tìm thấy vote của player ${playerEvent.player_id}.`
+          );
+        }
+
+        const aiEvent =
+          toAIEvent(
+            playerEvent
+          );
+
+        const chosenChoice =
+          aiEvent.choices.find(
+            (choice) =>
+              String(choice.id) ===
+              String(
+                vote.choice_id
+              )
+          );
+
+        return {
+          id:
+            player.id,
+
+          player_name:
+            player.player_name,
+
+          hp:
+            Number(
+              player.hp ?? 100
+            ),
+
+          money:
+            Number(
+              player.money ?? 0
+            ),
+
+          location:
+            player.location ??
+            "Việt Nam",
+
+          legal_risk:
+            Number(
+              player.legal_risk ?? 0
+            ),
+
+          rounds_in_location:
+            locationCounts.get(
+              player.location ??
+                "Việt Nam"
+            ) ?? 0,
 
           event: {
             title:
-              `Một ngày mới - Vòng ${round + 1}`,
+              aiEvent.title,
 
             description:
-              `Bạn đang ở ${resolved.application.after.location}. Một ngày mới bắt đầu và bạn phải quyết định bước tiếp theo.`,
+              aiEvent.description,
 
             type:
-              "normal",
+              aiEvent.type,
 
-            choices: [
-              {
-                id:
-                  "continue",
+            destination:
+              aiEvent.destination ??
+              null,
 
-                text:
-                  "Tiếp tục tiến lên",
-              },
-
-              {
-                id:
-                  "money",
-
-                text:
-                  "Tìm cơ hội kiếm tiền",
-              },
-
-              {
-                id:
-                  "rest",
-
-                text:
-                  "Nghỉ ngơi",
-              },
-
-              {
-                id:
-                  "explore",
-
-                text:
-                  "Khám phá khu vực",
-              },
-            ],
+            choices:
+              aiEvent.choices,
           },
-        })
-      ),
-  };
+
+          chosen_choice_id:
+            String(
+              vote.choice_id
+            ),
+
+          chosen_choice_text:
+            chosenChoice?.text ??
+            "",
+        };
+      }
+    );
+
+  return {
+  round: input.round,
+  players: outcomePlayers,
+};
 }
 
-/* =====================================================
-   BUILD SAFE OUTCOME FALLBACK
-   ===================================================== */
+/* ============================================================
+   FALLBACK OUTCOME
+   ============================================================ */
 
-function buildFallbackOutcome(
+function fallbackOutcome(
+  input: RoundResolveInput
+): Record<
+  string,
+  AIPlayerEffects
+> {
+  const result: Record<
+    string,
+    AIPlayerEffects
+  > = {};
+
+  for (
+    const playerEvent
+      of input.playerEvents
+  ) {
+    result[
+      playerEvent.player_id
+    ] = {};
+  }
+
+  return result;
+}
+
+/* ============================================================
+   FALLBACK NEXT EVENTS
+   ============================================================ */
+
+function fallbackNextEvents(
   round: number,
   players: Player[]
-): ValidatedAIOutcomeResponse {
+): ValidatedAIEventResponse {
   return {
     round,
 
@@ -547,423 +686,651 @@ function buildFallbackOutcome(
           player_id:
             player.id,
 
-          effects: {
-            hp:
-              0,
+          event: {
+            title:
+              `Một ngày mới - Vòng ${round}`,
 
-            money:
-              0,
+            description:
+              "Một tình huống mới xuất hiện trên hành trình.",
 
-            legal_risk:
-              0,
+            type:
+              "normal",
+
+            destination:
+              null,
+
+            choices: [
+              {
+                id: "a",
+                text:
+                  "Tiếp tục theo kế hoạch",
+              },
+              {
+                id: "b",
+                text:
+                  "Tìm kiếm cơ hội mới",
+              },
+              {
+                id: "c",
+                text:
+                  "Nghỉ ngơi và quan sát",
+              },
+              {
+                id: "d",
+                text:
+                  "Di chuyển sang khu vực khác",
+              },
+            ],
           },
         })
       ),
   };
 }
 
-/* =====================================================
+/* ============================================================
    RESOLVE ROUND
-   ===================================================== */
+   ============================================================ */
 
 export async function resolveRound(
   input: RoundResolveInput
 ): Promise<RoundResolveResult> {
-  const {
-    round,
-    event,
-    players,
-    votes,
-    playerEvents,
-  } = input;
-
-  /* ===================================================
-     BASIC VALIDATION
-     =================================================== */
-
   if (
-    players.length ===
+    input.players.length ===
     0
   ) {
     throw new Error(
-      "Cannot resolve round without players."
+      "Cannot resolve round without active players."
     );
   }
 
   if (
-    votes.length !==
-    players.length
+    input.playerEvents.length !==
+    input.players.length
   ) {
     throw new Error(
-      `Expected ${players.length} votes, received ${votes.length}.`
+      `Player/event count mismatch: ${input.players.length} players vs ${input.playerEvents.length} events.`
     );
   }
 
   if (
-    playerEvents.length !==
-    players.length
+    input.votes.length !==
+    input.players.length
   ) {
     throw new Error(
-      `Expected ${players.length} player events, received ${playerEvents.length}.`
+      `Player/vote count mismatch: ${input.players.length} players vs ${input.votes.length} votes.`
     );
   }
 
-  /* ===================================================
-     MAP VOTES
-     =================================================== */
+  /*
+   * ----------------------------------------------------------
+   * PLAYER MAP
+   * ----------------------------------------------------------
+   */
+
+  const playerMap =
+    new Map(
+      input.players.map(
+        (player) => [
+          player.id,
+          player,
+        ]
+      )
+    );
 
   const voteMap =
-    new Map<
-      string,
-      PlayerVote
-    >();
+    new Map(
+      input.votes.map(
+        (vote) => [
+          vote.player_id,
+          vote,
+        ]
+      )
+    );
+
+  /*
+   * ----------------------------------------------------------
+   * VALIDATE PRIVATE EVENTS
+   * ----------------------------------------------------------
+   */
 
   for (
-    const vote of
-      votes
+    const playerEvent
+      of input.playerEvents
   ) {
     if (
-      !voteMap.has(
-        vote.player_id
+      !playerMap.has(
+        playerEvent.player_id
       )
     ) {
-      voteMap.set(
-        vote.player_id,
-        vote
+      throw new Error(
+        `Player ${playerEvent.player_id} does not exist in active players.`
       );
     }
-  }
 
-  /* ===================================================
-     VERIFY EVERY PLAYER HAS:
-     
-     - a vote
-     - a private event
-     - the selected choice exists
-     =================================================== */
-
-  for (
-    const player of
-      players
-  ) {
     const vote =
       voteMap.get(
-        player.id
+        playerEvent.player_id
       );
 
     if (!vote) {
       throw new Error(
-        `Missing vote for player ${player.id}.`
-      );
-    }
-
-    const playerEvent =
-      playerEvents.find(
-        (event) =>
-          event.player_id ===
-          player.id
-      );
-
-    if (!playerEvent) {
-      throw new Error(
-        `Player event missing for player ${player.id}.`
+        `Không tìm thấy vote cho player ${playerEvent.player_id}.`
       );
     }
 
     const choices =
-      normalizeChoices(
+      normalizeChoiceList(
         playerEvent.choices
       );
 
-    const selectedChoice =
-      choices.find(
+    const validChoice =
+      choices.some(
         (choice) =>
-          choice.id ===
-          vote.choice_id
+          String(choice.id) ===
+          String(
+            vote.choice_id
+          )
       );
 
-    if (!selectedChoice) {
+    if (!validChoice) {
       throw new Error(
-        `Selected choice ${vote.choice_id} does not belong to player ${player.id}'s event.`
+        `Invalid choice "${vote.choice_id}" for player ${playerEvent.player_id}.`
       );
     }
   }
 
-  /* ===================================================
-     BUILD CURRENT-ROUND AI OUTCOME CONTEXT
-     =================================================== */
+  /*
+   * ----------------------------------------------------------
+   * BUILD OUTCOME CONTEXT
+   * ----------------------------------------------------------
+   */
 
   const aiContext =
     buildAIOutcomeContext(
-      round,
-      players,
-      playerEvents,
-      voteMap
+      input
     );
 
-  /* ===================================================
-     GENERATE OUTCOMES ONLY
-     
-     IMPORTANT:
-     
-     Do NOT generate next-round events here.
+  console.log(
+    "ROUND RESOLVE → OUTCOME CONTEXT",
+    JSON.stringify(
+      aiContext,
+      null,
+      2
+    )
+  );
 
-     The next event must be generated only AFTER
-     server-side outcome application because travel,
-     money, HP, legal risk, etc. may change.
-     =================================================== */
+  /*
+   * ----------------------------------------------------------
+   * AI OUTCOME
+   * ----------------------------------------------------------
+   */
 
-  let aiResponse:
-    ValidatedAIOutcomeResponse;
+  let aiResponse: any;
 
   try {
     aiResponse =
-      await generateAIHostOutcomeGroq(
+      await generateAIHostOutcome(
         aiContext
       );
+
+    console.log(
+      "ROUND RESOLVE → AI OUTCOME",
+      JSON.stringify(
+        aiResponse,
+        null,
+        2
+      )
+    );
   } catch (error) {
-    console.warn(
-      "GROQ OUTCOME GENERATION FAILED — using safe fallback.",
+    console.error(
+      "ROUND RESOLVE → AI OUTCOME ERROR",
       error
     );
 
-    aiResponse =
-      buildFallbackOutcome(
-        round,
-        players
-      );
+    aiResponse = {
+      players:
+        fallbackOutcome(
+          input
+        ),
+    };
   }
 
-  /* ===================================================
-     APPLY OUTCOMES
-     =================================================== */
+  /*
+   * ----------------------------------------------------------
+   * EXTRACT PLAYER OUTCOMES
+   * ----------------------------------------------------------
+   */
+
+  const rawPlayerOutcomes =
+    aiResponse?.players ??
+    aiResponse?.outcomes ??
+    aiResponse?.results ??
+    {};
+
+  /*
+   * ----------------------------------------------------------
+   * APPLY PLAYER RESULTS
+   * ----------------------------------------------------------
+   */
 
   const resolvedPlayers:
-    PlayerRoundResolveResult[] =
-    [];
+    ResolvedPlayer[] = [];
 
   for (
-    const player of
-      players
+    const playerEvent
+      of input.playerEvents
   ) {
+    const player =
+      playerMap.get(
+        playerEvent.player_id
+      );
+
+    if (!player) {
+      throw new Error(
+        `Missing player ${playerEvent.player_id} during resolution.`
+      );
+    }
+
     const vote =
       voteMap.get(
-        player.id
+        playerEvent.player_id
       );
 
     if (!vote) {
       throw new Error(
-        `Missing vote for player ${player.id}.`
+        `Missing vote ${playerEvent.player_id} during resolution.`
       );
     }
 
-    const playerEvent =
-      playerEvents.find(
-        (event) =>
-          event.player_id ===
-          player.id
+    const currentStats =
+      getPlayerStats(
+        player
       );
-
-    if (!playerEvent) {
-      throw new Error(
-        `Player event missing for player ${player.id}.`
-      );
-    }
-
-    const aiOutcome =
-      aiResponse.players.find(
-        (result) =>
-          result.player_id ===
-          player.id
-      );
-
-    if (!aiOutcome) {
-      throw new Error(
-        `AI outcome missing for player ${player.id}.`
-      );
-    }
 
     /*
-     * Convert the DB private event into the AIEvent
-     * structure expected by applyPlayerResult().
+     * --------------------------------------------------------
+     * RAW AI EFFECTS
+     * --------------------------------------------------------
      */
-    const normalizedEvent = {
-      title:
-        playerEvent.title,
 
-      description:
-        playerEvent.description,
-
-      type:
-        playerEvent.event_type,
-
-      destination:
-        playerEvent.destination ??
-        null,
-
-      choices:
-        normalizeChoices(
-          playerEvent.choices
-        ),
-    };
-
-    /* =================================================
-       LOCATION / TRAVEL SAFETY
-       =================================================
-
-       The AI may only move a player to the destination
-       explicitly attached to this private event.
-
-       The AI cannot invent a location.
-
-       Travel is therefore:
-
-         AI choice consequence
-               ↓
-         requested location
-               ↓
-         compare with event.destination
-               ↓
-         accept/reject
-    */
-
-    const safeEffects = {
-      ...aiOutcome.effects,
-    };
+    let rawEffects:
+      AIPlayerEffects = {};
 
     if (
-      safeEffects.location !==
-      undefined
+      rawPlayerOutcomes &&
+      typeof rawPlayerOutcomes ===
+        "object"
     ) {
-      const destination =
-        normalizedEvent.destination;
+      const playerOutcome =
+        rawPlayerOutcomes[
+          playerEvent.player_id
+        ];
 
-      const requestedLocation =
-        typeof safeEffects.location ===
-        "string"
-          ? safeEffects.location.trim()
-          : "";
-
-      const currentLocation =
-        player.location.trim();
-
-      const validTravel =
-        typeof destination ===
-          "string" &&
-        destination.trim().length > 0 &&
-        requestedLocation.length > 0 &&
-        requestedLocation ===
-          destination.trim() &&
-        requestedLocation !==
-          currentLocation;
-
-      if (!validTravel) {
-        delete safeEffects.location;
+      if (
+        playerOutcome &&
+        typeof playerOutcome ===
+          "object"
+      ) {
+        rawEffects =
+          playerOutcome.effects ??
+          playerOutcome.result ??
+          playerOutcome;
       }
     }
 
-    /* =================================================
-       SERVER-SIDE STATE APPLICATION
-       ================================================= */
+    /*
+     * --------------------------------------------------------
+     * PRIVATE EVENT → AI EVENT
+     * --------------------------------------------------------
+     */
+
+    const aiEvent =
+      toAIEvent(
+        playerEvent
+      );
+
+    /*
+     * --------------------------------------------------------
+     * ECONOMIC SAFETY
+     * --------------------------------------------------------
+     */
+
+    const economicSafeEffects =
+      applyEconomicSafety(
+        aiEvent,
+
+        vote.choice_id,
+
+        rawEffects
+      );
+
+    /*
+     * --------------------------------------------------------
+     * LOCATION SAFETY
+     * --------------------------------------------------------
+     */
+
+    const safeEffects =
+      applyLocationSafety(
+        currentStats,
+
+        economicSafeEffects
+      );
+
+    /*
+     * --------------------------------------------------------
+     * APPLY STATS
+     * --------------------------------------------------------
+     */
 
     const application =
       applyPlayerResult(
-        getPlayerStats(
-          player
-        ),
+        currentStats,
 
         player.id,
 
-        normalizedEvent,
+        aiEvent,
 
         safeEffects,
 
         vote.choice_id
       );
 
+    /*
+     * --------------------------------------------------------
+     * DEBUG
+     * --------------------------------------------------------
+     */
+
+    console.log(
+      "ROUND RESULT",
+      JSON.stringify(
+        {
+          playerId:
+            player.id,
+
+          playerName:
+            player.player_name,
+
+          playerEventId:
+            playerEvent.id,
+
+          eventTitle:
+            aiEvent.title,
+
+          selectedChoiceId:
+            vote.choice_id,
+
+          selectedChoiceText:
+            aiEvent.choices.find(
+              (choice) =>
+                String(
+                  choice.id
+                ) ===
+                String(
+                  vote.choice_id
+                )
+            )?.text ?? "",
+
+          before:
+            application.before,
+
+          rawEffects,
+
+          safeEffects:
+            application.effects,
+
+          moneyEffect:
+            application.effects
+              .money ?? 0,
+
+          moneyBefore:
+            application.before
+              .money,
+
+          moneyAfter:
+            application.after
+              .money,
+
+          hpBefore:
+            application.before.hp,
+
+          hpAfter:
+            application.after.hp,
+
+          locationBefore:
+            application.before
+              .location,
+
+          locationAfter:
+            application.after
+              .location,
+        },
+        null,
+        2
+      )
+    );
+
     resolvedPlayers.push({
       player,
 
       vote,
 
-      playerEvent,
-
       application,
     });
   }
 
-  /* ===================================================
-     IMPORTANT:
-     
-     AT THIS POINT ALL CURRENT-ROUND OUTCOMES HAVE
-     BEEN APPLIED IN MEMORY.
-     
-     application.after now contains the real state
-     that the next-round AI must see.
-     =================================================== */
+  /*
+   * ----------------------------------------------------------
+   * NEXT ROUND PLAYER CONTEXT
+   * ----------------------------------------------------------
+   */
 
-  const nextRoundPlayers =
-    buildNextRoundPlayers(
-      round,
-      players,
-      resolvedPlayers
+  const nextRoundLocationCounts =
+    getRoundsInLocation(
+      resolvedPlayers.map(
+        (resolvedPlayer) => ({
+          ...resolvedPlayer.player,
+
+          hp:
+            resolvedPlayer
+              .application
+              .after.hp,
+
+          money:
+            resolvedPlayer
+              .application
+              .after.money,
+
+          location:
+            resolvedPlayer
+              .application
+              .after.location,
+
+          legal_risk:
+            resolvedPlayer
+              .application
+              .after
+              .legal_risk,
+        })
+      )
     );
 
-  /* ===================================================
-     GENERATE NEXT-ROUND EVENTS
-     
-     This is intentionally AFTER outcome application.
-     
-     Therefore:
-     
-       current location
-             ↓
-       player chooses travel
-             ↓
-       server validates travel
-             ↓
-       application.after.location
-             ↓
-       nextRoundPlayers.location
-             ↓
-       AI generates next event
-     
-     No stale location.
-     =================================================== */
+  const nextRoundPlayers:
+    AIHostPlayerContext[] =
+    resolvedPlayers.map(
+      (resolvedPlayer) => ({
+        id:
+          resolvedPlayer
+            .player.id,
+
+        player_name:
+          resolvedPlayer
+            .player.player_name,
+
+        hp:
+          resolvedPlayer
+            .application
+            .after.hp,
+
+        money:
+          resolvedPlayer
+            .application
+            .after.money,
+
+        location:
+          resolvedPlayer
+            .application
+            .after
+            .location,
+
+        legal_risk:
+          resolvedPlayer
+            .application
+            .after
+            .legal_risk,
+
+        rounds_in_location:
+          nextRoundLocationCounts.get(
+            resolvedPlayer
+              .application
+              .after
+              .location
+          ) ?? 0,
+      })
+    );
+
+  /*
+   * ----------------------------------------------------------
+   * GENERATE NEXT EVENTS
+   * ----------------------------------------------------------
+   */
 
   let nextEvents:
     ValidatedAIEventResponse;
 
   try {
     nextEvents =
-      await generateAIHostNextEventsGroq({
-        round:
-          round + 1,
+      await generateAIHostNextEventsGroq(
+        {
+          round:
+            input.round + 1,
 
-        players:
-          nextRoundPlayers,
-      });
+          players:
+            nextRoundPlayers,
+        }
+      );
+
+    console.log(
+      "ROUND RESOLVE → NEXT EVENTS",
+      JSON.stringify(
+        nextEvents,
+        null,
+        2
+      )
+    );
   } catch (error) {
-    console.warn(
-      "GROQ NEXT-EVENT GENERATION FAILED — using safe fallback.",
+    console.error(
+      "ROUND RESOLVE → NEXT EVENTS ERROR",
       error
     );
 
+    const fallbackPlayers:
+      Player[] =
+      resolvedPlayers.map(
+        (resolvedPlayer) => ({
+          ...resolvedPlayer.player,
+
+          hp:
+            resolvedPlayer
+              .application
+              .after.hp,
+
+          money:
+            resolvedPlayer
+              .application
+              .after.money,
+
+          location:
+            resolvedPlayer
+              .application
+              .after
+              .location,
+
+          legal_risk:
+            resolvedPlayer
+              .application
+              .after
+              .legal_risk,
+        })
+      );
+
     nextEvents =
-      buildFallbackNextEvents(
-        round,
-        resolvedPlayers
+      fallbackNextEvents(
+        input.round + 1,
+
+        fallbackPlayers
       );
   }
 
-  /* ===================================================
-     FINAL RESULT
-     =================================================== */
+  /*
+   * ----------------------------------------------------------
+   * COMPLETE
+   * ----------------------------------------------------------
+   */
+
+  console.log(
+    "ROUND RESOLVE → COMPLETE",
+    JSON.stringify(
+      {
+        round:
+          input.round,
+
+        resolvedPlayers:
+          resolvedPlayers.map(
+            (resolvedPlayer) => ({
+              playerId:
+                resolvedPlayer
+                  .player.id,
+
+              playerName:
+                resolvedPlayer
+                  .player
+                  .player_name,
+
+              selectedChoiceId:
+                resolvedPlayer
+                  .vote
+                  .choice_id,
+
+              moneyBefore:
+                resolvedPlayer
+                  .application
+                  .before
+                  .money,
+
+              moneyEffect:
+                resolvedPlayer
+                  .application
+                  .effects
+                  .money ?? 0,
+
+              moneyAfter:
+                resolvedPlayer
+                  .application
+                  .after
+                  .money,
+            })
+          ),
+      },
+      null,
+      2
+    )
+  );
 
   return {
-    round,
-
-    event,
+    round:
+      input.round,
 
     players:
       resolvedPlayers,

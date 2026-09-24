@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-import { addItem } from "@/lib/game/inventory";
-
-const SHOP_DURATION_MS = 75_000;
+const SHOP_DURATION_MS = 85_000;
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,15 +11,27 @@ const supabase = createClient(
       autoRefreshToken: false,
       persistSession: false,
     },
-  }
+  },
 );
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ code: string }> }
+  { params }: { params: Promise<{ code: string }> },
 ) {
   try {
     const { code } = await params;
+
+    const roomCode = String(code ?? "").trim();
+
+    if (!/^\d{6}$/.test(roomCode)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Mã phòng không hợp lệ.",
+        },
+        { status: 400 },
+      );
+    }
 
     const body = await request.json().catch(() => null);
 
@@ -45,7 +55,7 @@ export async function POST(
           ok: false,
           error: "Thiếu itemId.",
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -55,7 +65,7 @@ export async function POST(
           ok: false,
           error: "Thiếu player token.",
         },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
@@ -68,14 +78,14 @@ export async function POST(
       error: roomError,
     } = await supabase
       .from("rooms")
-      .select("id, code")
-      .eq("code", code)
+      .select("id, code, status")
+      .eq("code", roomCode)
       .maybeSingle();
 
     if (roomError) {
       console.error(
         "[SHOP BUY] room lookup:",
-        roomError
+        roomError,
       );
 
       return NextResponse.json(
@@ -83,7 +93,7 @@ export async function POST(
           ok: false,
           error: "Không thể tìm phòng.",
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -93,7 +103,7 @@ export async function POST(
           ok: false,
           error: "Phòng không tồn tại.",
         },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
@@ -107,7 +117,7 @@ export async function POST(
     } = await supabase
       .from("room_players")
       .select(
-        "id, room_id, role, player_token, money"
+        "id, room_id, role, player_token, money, moderation_status",
       )
       .eq("room_id", room.id)
       .eq("player_token", playerToken)
@@ -116,7 +126,7 @@ export async function POST(
     if (playerError) {
       console.error(
         "[SHOP BUY] player lookup:",
-        playerError
+        playerError,
       );
 
       return NextResponse.json(
@@ -124,7 +134,7 @@ export async function POST(
           ok: false,
           error: "Không thể xác thực người chơi.",
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -134,18 +144,35 @@ export async function POST(
           ok: false,
           error: "Player token không hợp lệ.",
         },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
-    // Spectator cannot buy
-    if (player.role === "spectator") {
+    if (
+      !["host", "player"].includes(
+        player.role,
+      )
+    ) {
       return NextResponse.json(
         {
           ok: false,
           error: "Spectator không thể mua vật phẩm.",
         },
-        { status: 403 }
+        { status: 403 },
+      );
+    }
+
+    if (
+      player.moderation_status !==
+      "active"
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Người chơi không còn hoạt động trong phòng.",
+        },
+        { status: 403 },
       );
     }
 
@@ -159,16 +186,20 @@ export async function POST(
     } = await supabase
       .from("game_sessions")
       .select(
-        "id, room_id, round, phase, status"
+        "id, room_id, round, phase, status",
       )
       .eq("room_id", room.id)
       .eq("status", "active")
+      .order("session_number", {
+        ascending: false,
+      })
+      .limit(1)
       .maybeSingle();
 
     if (sessionError) {
       console.error(
         "[SHOP BUY] game session lookup:",
-        sessionError
+        sessionError,
       );
 
       return NextResponse.json(
@@ -177,7 +208,7 @@ export async function POST(
           error:
             "Không thể kiểm tra trạng thái game.",
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -187,7 +218,7 @@ export async function POST(
           ok: false,
           error: "Game chưa bắt đầu.",
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
@@ -203,7 +234,7 @@ export async function POST(
           phase: session.phase,
           round: session.round,
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
@@ -217,7 +248,7 @@ export async function POST(
     } = await supabase
       .from("shop_sessions")
       .select(
-        "id, room_id, round, started_at, expires_at"
+        "id, room_id, round, started_at, expires_at",
       )
       .eq("room_id", room.id)
       .eq("round", session.round)
@@ -226,7 +257,7 @@ export async function POST(
     if (shopSessionError) {
       console.error(
         "[SHOP BUY] shop session lookup:",
-        shopSessionError
+        shopSessionError,
       );
 
       return NextResponse.json(
@@ -234,7 +265,7 @@ export async function POST(
           ok: false,
           error: "Không thể tìm phiên Shop.",
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -244,7 +275,7 @@ export async function POST(
           ok: false,
           error: "Phiên Shop chưa được tạo.",
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
@@ -256,12 +287,12 @@ export async function POST(
 
     const startedAt =
       new Date(
-        shopSession.started_at
+        shopSession.started_at,
       ).getTime();
 
     const expiresAt =
       new Date(
-        shopSession.expires_at
+        shopSession.expires_at,
       ).getTime();
 
     if (
@@ -271,19 +302,28 @@ export async function POST(
       return NextResponse.json(
         {
           ok: false,
-          error: "Thời gian Shop không hợp lệ.",
+          error:
+            "Thời gian Shop không hợp lệ.",
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
+
+    /*
+     * Server giới hạn Shop tối đa 85 giây.
+     *
+     * Nếu expires_at trong DB vô tình dài hơn,
+     * server vẫn không cho mua quá 85 giây.
+     */
 
     const calculatedExpiresAt =
       startedAt + SHOP_DURATION_MS;
 
-    const actualExpiresAt = Math.min(
-      expiresAt,
-      calculatedExpiresAt
-    );
+    const actualExpiresAt =
+      Math.min(
+        expiresAt,
+        calculatedExpiresAt,
+      );
 
     if (now >= actualExpiresAt) {
       return NextResponse.json(
@@ -291,8 +331,14 @@ export async function POST(
           ok: false,
           error: "Shop đã hết thời gian.",
           expired: true,
+          serverNow:
+            new Date().toISOString(),
+          expiresAt:
+            new Date(
+              actualExpiresAt,
+            ).toISOString(),
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
@@ -306,7 +352,7 @@ export async function POST(
     } = await supabase
       .from("item_definitions")
       .select(
-        "id, name, name_en, price, category, stackable"
+        "id, name, name_en, price, category, stackable",
       )
       .eq("id", itemId)
       .maybeSingle();
@@ -314,15 +360,16 @@ export async function POST(
     if (itemError) {
       console.error(
         "[SHOP BUY] item lookup:",
-        itemError
+        itemError,
       );
 
       return NextResponse.json(
         {
           ok: false,
-          error: "Không thể kiểm tra vật phẩm.",
+          error:
+            "Không thể kiểm tra vật phẩm.",
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -330,9 +377,10 @@ export async function POST(
       return NextResponse.json(
         {
           ok: false,
-          error: "Vật phẩm không tồn tại.",
+          error:
+            "Vật phẩm không tồn tại.",
         },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
@@ -346,11 +394,11 @@ export async function POST(
     } = await supabase
       .from("shop_stock")
       .select(
-        "id, shop_session_id, item_id, initial_stock, remaining_stock"
+        "id, shop_session_id, item_id, initial_stock, remaining_stock",
       )
       .eq(
         "shop_session_id",
-        shopSession.id
+        shopSession.id,
       )
       .eq("item_id", itemId)
       .maybeSingle();
@@ -358,15 +406,16 @@ export async function POST(
     if (stockError) {
       console.error(
         "[SHOP BUY] stock lookup:",
-        stockError
+        stockError,
       );
 
       return NextResponse.json(
         {
           ok: false,
-          error: "Không thể kiểm tra tồn kho.",
+          error:
+            "Không thể kiểm tra tồn kho.",
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -377,25 +426,28 @@ export async function POST(
           error:
             "Vật phẩm này không có trong Shop hiện tại.",
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
     const remainingStock = Number(
-      stock.remaining_stock ?? 0
+      stock.remaining_stock ?? 0,
     );
 
     if (
-      !Number.isFinite(remainingStock) ||
+      !Number.isFinite(
+        remainingStock,
+      ) ||
       remainingStock <= 0
     ) {
       return NextResponse.json(
         {
           ok: false,
-          error: "Vật phẩm đã hết hàng.",
+          error:
+            "Vật phẩm đã hết hàng.",
           remainingStock: 0,
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
@@ -404,7 +456,7 @@ export async function POST(
     // =========================================================
 
     const price = Number(
-      item.price ?? 0
+      item.price ?? 0,
     );
 
     if (
@@ -414,9 +466,10 @@ export async function POST(
       return NextResponse.json(
         {
           ok: false,
-          error: "Giá vật phẩm không hợp lệ.",
+          error:
+            "Giá vật phẩm không hợp lệ.",
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -425,7 +478,7 @@ export async function POST(
     // =========================================================
 
     const money = Number(
-      player.money ?? 0
+      player.money ?? 0,
     );
 
     if (!Number.isFinite(money)) {
@@ -435,7 +488,7 @@ export async function POST(
           error:
             "Số tiền người chơi không hợp lệ.",
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -448,12 +501,12 @@ export async function POST(
           price,
           money,
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
     // =========================================================
-    // 12. ATOMIC MONEY + STOCK PURCHASE
+    // 12. ATOMIC PURCHASE
     // =========================================================
 
     const {
@@ -467,14 +520,13 @@ export async function POST(
         p_shop_session_id:
           shopSession.id,
         p_item_id: item.id,
-        p_price: price,
-      }
+      },
     );
 
     if (purchaseError) {
       console.error(
         "[SHOP BUY] transaction failed:",
-        purchaseError
+        purchaseError,
       );
 
       const message =
@@ -482,7 +534,10 @@ export async function POST(
 
       if (
         message.includes(
-          "INSUFFICIENT_MONEY"
+          "INSUFFICIENT_FUNDS",
+        ) ||
+        message.includes(
+          "INSUFFICIENT_MONEY",
         )
       ) {
         return NextResponse.json(
@@ -491,13 +546,13 @@ export async function POST(
             error:
               "Bạn không đủ tiền để mua vật phẩm này.",
           },
-          { status: 409 }
+          { status: 409 },
         );
       }
 
       if (
         message.includes(
-          "OUT_OF_STOCK"
+          "OUT_OF_STOCK",
         )
       ) {
         return NextResponse.json(
@@ -507,13 +562,13 @@ export async function POST(
               "Vật phẩm vừa được người khác mua hết.",
             remainingStock: 0,
           },
-          { status: 409 }
+          { status: 409 },
         );
       }
 
       if (
         message.includes(
-          "ITEM_NOT_IN_SHOP"
+          "ITEM_NOT_IN_SHOP",
         )
       ) {
         return NextResponse.json(
@@ -522,7 +577,52 @@ export async function POST(
             error:
               "Vật phẩm không còn trong Shop.",
           },
-          { status: 409 }
+          { status: 409 },
+        );
+      }
+
+      if (
+        message.includes(
+          "PLAYER_NOT_FOUND",
+        )
+      ) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "Người chơi không còn hợp lệ.",
+          },
+          { status: 403 },
+        );
+      }
+
+      if (
+        message.includes(
+          "ITEM_NOT_FOUND",
+        )
+      ) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "Vật phẩm không tồn tại.",
+          },
+          { status: 404 },
+        );
+      }
+
+      if (
+        message.includes(
+          "STOCK_NOT_FOUND",
+        )
+      ) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "Vật phẩm không còn trong Shop.",
+          },
+          { status: 409 },
         );
       }
 
@@ -534,86 +634,44 @@ export async function POST(
           details:
             purchaseError.message,
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
+    // =========================================================
+    // 13. NORMALIZE RPC RESULT
+    // =========================================================
+
     const result =
       (purchaseResult ?? {}) as {
-        success?: boolean;
+        player_id?: string;
         money?: number;
+        item_id?: string;
+        item_name?: string;
+        item_name_en?: string;
+        price?: number;
+        category?: string;
+        stackable?: boolean;
+        inventory_quantity?: number;
         remaining_stock?: number;
       };
 
     const newMoney = Number(
-      result.money ?? money - price
+      result.money ??
+        money - price,
     );
 
     const newRemainingStock =
       Number(
         result.remaining_stock ??
-          remainingStock - 1
+          remainingStock - 1,
       );
 
-    // =========================================================
-    // 13. ADD ITEM TO PLAYER INVENTORY
-    // =========================================================
-    //
-    // Money + stock đã được xử lý bởi PostgreSQL RPC.
-    // Inventory service chịu trách nhiệm tạo/cộng item
-    // và ghi purchase log.
-    //
-    // =========================================================
-
-    let inventoryItem;
-
-    try {
-      inventoryItem = await addItem({
-        roomId: room.id,
-        playerId: player.id,
-        itemId: item.id,
-        quantity: 1,
-        action: "purchase",
-        source: "shop",
-        referenceId: shopSession.id,
-        metadata: {
-          shop_session_id: shopSession.id,
-          round: shopSession.round,
-          price,
-          shop_stock_id: stock.id,
-        },
-      });
-    } catch (inventoryError) {
-      console.error(
-        "[SHOP BUY] inventory update failed:",
-        inventoryError
+    const inventoryQuantity =
+      Number(
+        result.inventory_quantity ??
+          1,
       );
-
-      /*
-       * IMPORTANT:
-       *
-       * buy_shop_item đã commit tiền + stock trước đó.
-       * Nếu inventory fail ở đây thì transaction PostgreSQL
-       * không thể tự rollback.
-       *
-       * Vì vậy đây là lỗi hệ thống cần được log để xử lý,
-       * không được giả vờ trả success.
-       */
-      return NextResponse.json(
-        {
-          ok: false,
-          error:
-            "Giao dịch đã trừ tiền nhưng không thể cập nhật túi đồ. Vui lòng báo Developer.",
-          transactionCompleted: true,
-          inventoryUpdated: false,
-          details:
-            inventoryError instanceof Error
-              ? inventoryError.message
-              : String(inventoryError),
-        },
-        { status: 500 }
-      );
-    }
 
     // =========================================================
     // 14. SUCCESS
@@ -622,17 +680,17 @@ export async function POST(
     console.log(
       "[SHOP BUY] PURCHASE SUCCESS",
       {
-        room: code,
+        room: roomCode,
         playerId: player.id,
         itemId: item.id,
         price,
         oldMoney: money,
         newMoney,
         oldStock: remainingStock,
-        newStock: newRemainingStock,
-        inventoryQuantity:
-          inventoryItem.quantity,
-      }
+        newStock:
+          newRemainingStock,
+        inventoryQuantity,
+      },
     );
 
     return NextResponse.json({
@@ -650,17 +708,30 @@ export async function POST(
 
       item: {
         id: item.id,
-        name: item.name,
-        nameEn: item.name_en,
-        price,
-        category: item.category,
-        stackable: item.stackable,
+        name:
+          result.item_name ??
+          item.name,
+        nameEn:
+          result.item_name_en ??
+          item.name_en,
+        price: Number(
+          result.price ??
+            item.price,
+        ),
+        category:
+          result.category ??
+          item.category,
+        stackable:
+          result.stackable ??
+          item.stackable,
       },
 
       inventory: {
-        id: inventoryItem.id,
-        itemId: inventoryItem.item_id,
-        quantity: inventoryItem.quantity,
+        itemId:
+          result.item_id ??
+          item.id,
+        quantity:
+          inventoryQuantity,
       },
 
       stock: {
@@ -675,7 +746,7 @@ export async function POST(
           shopSession.started_at,
         expiresAt:
           new Date(
-            actualExpiresAt
+            actualExpiresAt,
           ).toISOString(),
       },
 
@@ -685,7 +756,7 @@ export async function POST(
   } catch (error) {
     console.error(
       "[SHOP BUY] unexpected error:",
-      error
+      error,
     );
 
     return NextResponse.json(
@@ -694,7 +765,7 @@ export async function POST(
         error:
           "Lỗi máy chủ khi xử lý mua hàng.",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

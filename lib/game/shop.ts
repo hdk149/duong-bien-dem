@@ -21,10 +21,445 @@ type CloseShopResult = {
     id: string;
     room_id: string;
     round: number;
+    started_at: string | null;
+    expires_at: string | null;
+  };
+};
+
+/* =====================================================
+   START SHOP
+   =====================================================
+
+   Khi game chuyển sang:
+
+   game_sessions.phase = "shop"
+
+   thì Shop chỉ được HIỂN THỊ.
+
+   Timer KHÔNG bắt đầu.
+
+   Chỉ khi player bấm:
+
+   "Vào shop"
+
+   mới gọi startShop().
+
+   Khi đó:
+
+   started_at = NOW()
+   expires_at = NOW() + 85 giây
+
+   ===================================================== */
+
+export async function startShop(
+  supabase: SupabaseClient,
+  roomId: string
+): Promise<{
+  started: boolean;
+  alreadyStarted: boolean;
+
+  session: {
+    id: string;
+    room_id: string;
+    round: number;
+    phase: string;
+    current_event_id: string | null;
+  };
+
+  shopSession: {
+    id: string;
+    room_id: string;
+    round: number;
     started_at: string;
     expires_at: string;
   };
-};
+}> {
+  /* ===================================================
+     1. LOAD ACTIVE SESSION
+     =================================================== */
+
+  const {
+    data: session,
+    error: sessionError,
+  } = await supabase
+    .from("game_sessions")
+    .select(`
+      id,
+      room_id,
+      round,
+      phase,
+      current_event_id
+    `)
+    .eq(
+      "room_id",
+      roomId
+    )
+    .eq(
+      "status",
+      "active"
+    )
+    .order(
+      "session_number",
+      {
+        ascending: false,
+      }
+    )
+    .limit(1)
+    .maybeSingle();
+
+  if (sessionError) {
+    console.error(
+      "[START SHOP] session lookup error:",
+      sessionError
+    );
+
+    throw new Error(
+      "Không thể tải game session."
+    );
+  }
+
+  if (!session) {
+    throw new Error(
+      "Không tìm thấy game session đang chạy."
+    );
+  }
+
+  /* ===================================================
+     2. MUST BE SHOP PHASE
+     =================================================== */
+
+  if (
+    session.phase !==
+    "shop"
+  ) {
+    throw new Error(
+      "Hiện tại không ở giai đoạn Shop."
+    );
+  }
+
+  /* ===================================================
+     3. LOAD SHOP SESSION
+     =================================================== */
+
+  const {
+    data: shopSession,
+    error: shopSessionError,
+  } = await supabase
+    .from("shop_sessions")
+    .select(`
+      id,
+      room_id,
+      round,
+      started_at,
+      expires_at
+    `)
+    .eq(
+      "room_id",
+      roomId
+    )
+    .eq(
+      "round",
+      session.round
+    )
+    .maybeSingle();
+
+  if (shopSessionError) {
+    console.error(
+      "[START SHOP] shop session lookup error:",
+      shopSessionError
+    );
+
+    throw new Error(
+      "Không thể tải phiên Shop."
+    );
+  }
+
+  if (!shopSession) {
+    throw new Error(
+      "Phiên Shop không tồn tại."
+    );
+  }
+
+  /* ===================================================
+     4. ALREADY STARTED
+     =================================================== */
+
+  if (
+    shopSession.started_at
+  ) {
+    if (
+      !shopSession.expires_at
+    ) {
+      throw new Error(
+        "Phiên Shop đã bắt đầu nhưng thiếu thời gian kết thúc."
+      );
+    }
+
+    return {
+      started: false,
+      alreadyStarted: true,
+
+      session: {
+        id:
+          session.id,
+
+        room_id:
+          session.room_id,
+
+        round:
+          session.round,
+
+        phase:
+          session.phase,
+
+        current_event_id:
+          session.current_event_id,
+      },
+
+      shopSession: {
+        id:
+          shopSession.id,
+
+        room_id:
+          shopSession.room_id,
+
+        round:
+          shopSession.round,
+
+        started_at:
+          shopSession.started_at,
+
+        expires_at:
+          shopSession.expires_at,
+      },
+    };
+  }
+
+  /* ===================================================
+     5. CREATE TIMER
+     =================================================== */
+
+  const now =
+    new Date();
+
+  const startedAt =
+    now.toISOString();
+
+  const expiresAt =
+    new Date(
+      now.getTime() +
+        SHOP_DURATION_MS
+    ).toISOString();
+
+  /* ===================================================
+     6. ATOMIC START
+     ===================================================
+
+     Chỉ request đầu tiên được phép start.
+
+     Điều kiện:
+
+     started_at IS NULL
+
+     Các player khác click cùng lúc sẽ không
+     reset timer.
+     =================================================== */
+
+  const {
+    data: startedShopSession,
+    error: startError,
+  } = await supabase
+    .from("shop_sessions")
+    .update({
+      started_at:
+        startedAt,
+
+      expires_at:
+        expiresAt,
+    })
+    .eq(
+      "id",
+      shopSession.id
+    )
+    .eq(
+      "room_id",
+      roomId
+    )
+    .eq(
+      "round",
+      session.round
+    )
+    .is(
+      "started_at",
+      null
+    )
+    .select(`
+      id,
+      room_id,
+      round,
+      started_at,
+      expires_at
+    `)
+    .maybeSingle();
+
+  if (startError) {
+    console.error(
+      "[START SHOP] update error:",
+      startError
+    );
+
+    throw new Error(
+      "Không thể bắt đầu Shop."
+    );
+  }
+
+  /* ===================================================
+     7. ANOTHER PLAYER STARTED IT
+     =================================================== */
+
+  if (!startedShopSession) {
+    const {
+      data: latestShopSession,
+      error:
+        latestShopSessionError,
+    } = await supabase
+      .from("shop_sessions")
+      .select(`
+        id,
+        room_id,
+        round,
+        started_at,
+        expires_at
+      `)
+      .eq(
+        "id",
+        shopSession.id
+      )
+      .maybeSingle();
+
+    if (
+      latestShopSessionError
+    ) {
+      console.error(
+        "[START SHOP] race recovery error:",
+        latestShopSessionError
+      );
+
+      throw new Error(
+        "Không thể xác nhận trạng thái Shop."
+      );
+    }
+
+    if (
+      !latestShopSession ||
+      !latestShopSession.started_at ||
+      !latestShopSession.expires_at
+    ) {
+      throw new Error(
+        "Không thể bắt đầu phiên Shop."
+      );
+    }
+
+    return {
+      started: false,
+      alreadyStarted: true,
+
+      session: {
+        id:
+          session.id,
+
+        room_id:
+          session.room_id,
+
+        round:
+          session.round,
+
+        phase:
+          session.phase,
+
+        current_event_id:
+          session.current_event_id,
+      },
+
+      shopSession: {
+        id:
+          latestShopSession.id,
+
+        room_id:
+          latestShopSession.room_id,
+
+        round:
+          latestShopSession.round,
+
+        started_at:
+          latestShopSession.started_at,
+
+        expires_at:
+          latestShopSession.expires_at,
+      },
+    };
+  }
+
+  /* ===================================================
+     8. DONE
+     =================================================== */
+
+  console.log(
+    "[START SHOP] SHOP STARTED",
+    {
+      roomId,
+
+      sessionId:
+        session.id,
+
+      round:
+        session.round,
+
+      startedAt,
+
+      expiresAt,
+    }
+  );
+
+  return {
+    started: true,
+    alreadyStarted: false,
+
+    session: {
+      id:
+        session.id,
+
+      room_id:
+        session.room_id,
+
+      round:
+        session.round,
+
+      phase:
+        session.phase,
+
+      current_event_id:
+        session.current_event_id,
+    },
+
+    shopSession: {
+      id:
+        startedShopSession.id,
+
+      room_id:
+        startedShopSession.room_id,
+
+      round:
+        startedShopSession.round,
+
+      started_at:
+        startedShopSession.started_at!,
+
+      expires_at:
+        startedShopSession.expires_at!,
+    },
+  };
+}
 
 /* =====================================================
    CLOSE SHOP
@@ -32,26 +467,15 @@ type CloseShopResult = {
 
    Shop chỉ được đóng khi:
 
-   game_sessions.phase === "shop"
+   1. phase === "shop"
+   2. Shop ĐÃ được start
+   3. expires_at đã hết
 
-   và thời gian Shop đã hết.
+   Nếu player chưa bấm "Vào shop":
 
-   QUAN TRỌNG:
+   started_at = null
 
-   closeShop KHÔNG tạo round mới.
-   closeShop KHÔNG tạo event mới.
-
-   Ví dụ:
-
-   round = 7
-   phase = shop
-   current_event_id = EVENT_7
-
-   ↓ closeShop()
-
-   round = 7
-   phase = choosing
-   current_event_id = EVENT_7
+   => closeShop() KHÔNG đóng Shop.
 
    ===================================================== */
 
@@ -110,7 +534,7 @@ export async function closeShop(
   }
 
   /* ===================================================
-     2. ALREADY CLOSED / NOT SHOP
+     2. NOT SHOP
      =================================================== */
 
   if (
@@ -185,7 +609,67 @@ export async function closeShop(
   }
 
   /* ===================================================
-     4. VALIDATE SHOP TIME
+     4. SHOP CHƯA START
+     ===================================================
+
+     Đây là điểm quan trọng nhất.
+
+     Nếu:
+
+     started_at = null
+
+     thì player chưa bấm "Vào shop".
+
+     KHÔNG được tự đóng.
+     KHÔNG được tự chạy timer.
+     =================================================== */
+
+  if (
+    !shopSession.started_at
+  ) {
+    return {
+      closed: false,
+      alreadyClosed: false,
+      expired: false,
+
+      session: {
+        id:
+          session.id,
+
+        room_id:
+          session.room_id,
+
+        round:
+          session.round,
+
+        phase:
+          session.phase,
+
+        current_event_id:
+          session.current_event_id,
+      },
+
+      shopSession: {
+        id:
+          shopSession.id,
+
+        room_id:
+          shopSession.room_id,
+
+        round:
+          shopSession.round,
+
+        started_at:
+          null,
+
+        expires_at:
+          null,
+      },
+    };
+  }
+
+  /* ===================================================
+     5. VALIDATE TIMER
      =================================================== */
 
   const startedAt =
@@ -193,38 +677,52 @@ export async function closeShop(
       shopSession.started_at
     ).getTime();
 
-  const expiresAt =
-    new Date(
-      shopSession.expires_at
-    ).getTime();
-
   if (
     !Number.isFinite(
       startedAt
-    ) ||
-    !Number.isFinite(
-      expiresAt
     )
   ) {
     throw new Error(
-      "Thời gian Shop không hợp lệ."
+      "Thời gian bắt đầu Shop không hợp lệ."
     );
   }
 
   /*
-   * Server vẫn giới hạn theo 85 giây,
-   * kể cả nếu expires_at trong DB bị sai dài hơn.
+   * Server luôn giới hạn Shop tối đa 85 giây.
    */
 
   const calculatedExpiresAt =
     startedAt +
     SHOP_DURATION_MS;
 
-  const actualExpiresAt =
-    Math.min(
-      expiresAt,
-      calculatedExpiresAt
-    );
+  let actualExpiresAt =
+    calculatedExpiresAt;
+
+  /*
+   * Nếu DB đã có expires_at thì lấy
+   * mốc sớm hơn.
+   */
+
+  if (
+    shopSession.expires_at
+  ) {
+    const databaseExpiresAt =
+      new Date(
+        shopSession.expires_at
+      ).getTime();
+
+    if (
+      Number.isFinite(
+        databaseExpiresAt
+      )
+    ) {
+      actualExpiresAt =
+        Math.min(
+          databaseExpiresAt,
+          calculatedExpiresAt
+        );
+    }
+  }
 
   const now =
     Date.now();
@@ -234,7 +732,7 @@ export async function closeShop(
     actualExpiresAt;
 
   /* ===================================================
-     5. SHOP CHƯA HẾT
+     6. SHOP CHƯA HẾT
      =================================================== */
 
   if (!expired) {
@@ -282,15 +780,13 @@ export async function closeShop(
   }
 
   /* ===================================================
-     6. ATOMIC CLOSE
+     7. ATOMIC CLOSE
      ===================================================
 
-     Chỉ request đầu tiên được phép chuyển:
+     Chỉ request đầu tiên được phép:
 
      shop -> choosing
 
-     Các request khác sẽ không update được
-     vì phase không còn là "shop".
      =================================================== */
 
   const {
@@ -347,7 +843,7 @@ export async function closeShop(
   }
 
   /* ===================================================
-     7. ANOTHER REQUEST CLOSED IT
+     8. ANOTHER REQUEST CLOSED IT
      =================================================== */
 
   if (!closedSession) {
@@ -428,7 +924,7 @@ export async function closeShop(
   }
 
   /* ===================================================
-     8. SYNC GAME STATE
+     9. SYNC GAME STATE
      =================================================== */
 
   const {
@@ -462,13 +958,9 @@ export async function closeShop(
 
   if (syncError) {
     /*
-     * Không rollback game_sessions ở đây.
+     * Không rollback game_sessions.
 
-     * Lý do:
      * game_sessions là SOURCE OF TRUTH.
-     *
-     * Nếu game_states sync fail thì realtime/client
-     * vẫn có thể đọc game_sessions và recover.
      */
 
     console.error(
@@ -478,7 +970,7 @@ export async function closeShop(
   }
 
   /* ===================================================
-     9. DONE
+     10. DONE
      =================================================== */
 
   console.log(
@@ -530,7 +1022,7 @@ export async function closeShop(
         shopSession.round,
 
       started_at:
-        shopSession.started_at,
+        shopSession.started_at!,
 
       expires_at:
         new Date(

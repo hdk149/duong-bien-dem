@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -251,6 +252,11 @@ export default function ShopPage() {
   const [shopExpired, setShopExpired] =
     useState(false);
 
+  /* Prevent duplicate close requests when timer + realtime
+     reach the expiry boundary at the same time. */
+  const closingShopRef = useRef(false);
+  const redirectingToGameRef = useRef(false);
+
   const [serverOffsetMs, setServerOffsetMs] =
     useState(0);
 
@@ -415,12 +421,30 @@ export default function ShopPage() {
     useCallback(
       async () => {
         try {
+          const playerToken =
+            typeof window !== "undefined"
+              ? sessionStorage.getItem(
+                  "player_token"
+                )
+              : null;
+
+          const headers: Record<
+            string,
+            string
+          > = {};
+
+          if (playerToken) {
+            headers["x-player-token"] =
+              playerToken;
+          }
+
           const response =
             await fetch(
               `/api/rooms/${code}/shop/session`,
               {
                 method: "POST",
                 cache: "no-store",
+                headers,
               }
             );
 
@@ -678,6 +702,13 @@ export default function ShopPage() {
       return false;
     }
 
+    /* Only one close request may be in flight. */
+    if (closingShopRef.current) {
+      return false;
+    }
+
+    closingShopRef.current = true;
+
     try {
       const response = await fetch(
         `/api/rooms/${code}/shop/close`,
@@ -690,83 +721,98 @@ export default function ShopPage() {
         }
       );
 
-      if (!response.ok) {
-        return false;
+      /*
+       * 200 covers both:
+       * - closed: true
+       * - alreadyClosed: true
+       *
+       * Both states mean the client may leave /shop now.
+       */
+      if (response.ok) {
+        return true;
       }
 
-      return true;
+      return false;
     } catch (err) {
       console.error("Failed to close Shop:", err);
       return false;
+    } finally {
+      closingShopRef.current = false;
     }
+  }, [code]);
+
+  const returnToGameImmediately = useCallback(() => {
+    if (redirectingToGameRef.current) {
+      return;
+    }
+
+    redirectingToGameRef.current = true;
+
+    /*
+     * Use a real browser navigation instead of router.push().
+     * This guarantees /game/[code] performs a fresh no-store
+     * game-state request instead of keeping any stale Shop page
+     * state during a client-side transition.
+     */
+    window.location.replace(`/game/${code}`);
   }, [code]);
 
   /*
    * --------------------------------------------------
    * TIMER
+   *
+   * Server is authoritative. Prefer shop_session.expires_at
+   * over a locally reconstructed 85-second window.
+   * This fixes clock drift and the old 75s/85s mismatch.
    * --------------------------------------------------
    */
 
   useEffect(() => {
     if (!isShopPhase) {
       setShopExpired(false);
-
-      setRemainingMs(
-        SHOP_DURATION_MS
-      );
-
+      setRemainingMs(SHOP_DURATION_MS);
       return;
     }
 
-    if (!shopStartedAt) {
-      setRemainingMs(
-        SHOP_DURATION_MS
-      );
+    const expiresAtMs = shopExpiresAt
+      ? new Date(shopExpiresAt).getTime()
+      : NaN;
 
-      setShopExpired(false);
-
-      return;
-    }
-
-    const startedAtMs =
-      new Date(
-        shopStartedAt
-      ).getTime();
+    const startedAtMs = shopStartedAt
+      ? new Date(shopStartedAt).getTime()
+      : NaN;
 
     if (
-      !Number.isFinite(
-        startedAtMs
-      )
+      !Number.isFinite(expiresAtMs) &&
+      !Number.isFinite(startedAtMs)
     ) {
-      setRemainingMs(
-        SHOP_DURATION_MS
-      );
-
+      setRemainingMs(SHOP_DURATION_MS);
+      setShopExpired(false);
       return;
     }
 
-    let expiredHandled =
-      false;
+    let expiredHandled = false;
 
     const updateTimer = () => {
       const serverNowMs =
         Date.now() +
         serverOffsetMs;
 
-      const elapsed =
-        serverNowMs -
-        startedAtMs;
-
       const remaining =
-        Math.max(
-          0,
-          SHOP_DURATION_MS -
-            elapsed
-        );
+        Number.isFinite(expiresAtMs)
+          ? Math.max(
+              0,
+              expiresAtMs -
+                serverNowMs
+            )
+          : Math.max(
+              0,
+              SHOP_DURATION_MS -
+                (serverNowMs -
+                  startedAtMs)
+            );
 
-      setRemainingMs(
-        remaining
-      );
+      setRemainingMs(remaining);
 
       if (
         remaining <= 0 &&
@@ -775,27 +821,32 @@ export default function ShopPage() {
         expiredHandled = true;
 
         setShopExpired(true);
-
         setSelectedItem(null);
         setSelectedCategory(null);
 
         void (async () => {
-          const closed = await closeShopOnServer();
+          let closed =
+            await closeShopOnServer();
 
-          if (closed) {
-            router.push(`/game/${code}`);
-          } else {
-            // Retry shortly in case the first request raced with the
-            // server-side expiry boundary.
-            window.setTimeout(async () => {
-              const retryClosed =
-                await closeShopOnServer();
+          for (
+            let attempt = 0;
+            !closed && attempt < 5;
+            attempt += 1
+          ) {
+            await new Promise<void>((resolve) =>
+              window.setTimeout(resolve, 200)
+            );
 
-              if (retryClosed) {
-                router.push(`/game/${code}`);
-              }
-            }, 500);
+            closed =
+              await closeShopOnServer();
           }
+
+          /*
+           * The game page will perform a fresh server-state load.
+           * Always leave /shop once this authoritative timer hits 0
+           * so the player cannot remain trapped on a dead Shop page.
+           */
+          returnToGameImmediately();
         })();
       }
     };
@@ -803,20 +854,18 @@ export default function ShopPage() {
     updateTimer();
 
     const interval =
-      window.setInterval(
-        updateTimer,
-        250
-      );
+      window.setInterval(updateTimer, 250);
 
     return () => {
-      window.clearInterval(
-        interval
-      );
+      window.clearInterval(interval);
     };
   }, [
     isShopPhase,
     shopStartedAt,
+    shopExpiresAt,
     serverOffsetMs,
+    closeShopOnServer,
+    returnToGameImmediately,
   ]);
 
   /*

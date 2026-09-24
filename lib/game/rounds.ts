@@ -30,12 +30,32 @@ export type GeneratedPlayerRoundEvent = {
   status: string;
 };
 
+export function isMoneyQuestRound(round: number): boolean {
+  return (
+    round >= 6 &&
+    (round - 6) % 5 === 0
+  );
+}
+
 function buildAIContext(
   round: number,
-  players: Player[]
+  players: Player[],
+  recentEventsByPlayer: Map<
+    string,
+    {
+      round: number;
+      title: string;
+      description: string;
+      status: string | null;
+      event_type: string | null;
+    }[]
+  >
 ): AIHostContext {
   return {
     round,
+
+    isMoneyQuestRound:
+      isMoneyQuestRound(round),
 
     players: players.map((player) => ({
       id: player.id,
@@ -57,13 +77,18 @@ function buildAIContext(
 
       last_choice:
         player.last_choice,
+
       rounds_in_location:
-  (player as typeof player & {
-    rounds_in_location?: number;
-  }).rounds_in_location ?? 1,
+        (player as typeof player & {
+          rounds_in_location?: number;
+        }).rounds_in_location ?? 1,
+
+      recent_events:
+        recentEventsByPlayer.get(player.id) ?? [],
     })),
   };
 }
+
 
 /* =====================================================
    FALLBACK PRIVATE EVENT
@@ -71,61 +96,142 @@ function buildAIContext(
 
 function buildFallbackPrivateEvent(
   round: number,
-  player: Player
+  player: Player,
+  moneyQuest: boolean
 ) {
-  return {
-    title:
-      `Một ngày mới - Vòng ${round}`,
+  if (moneyQuest) {
+    return {
+      title:
+        `Cơ hội kiếm tiền lớn - Vòng ${round}`,
 
-    description:
-      `Bạn đang ở ${player.location}. Một ngày mới bắt đầu và bạn cần quyết định bước tiếp theo trong hành trình của mình.`,
+      description:
+        `Một cơ hội công việc có giá trị xuất hiện tại ${player.location}. Công việc đòi hỏi bạn phải tự quyết định cách tiếp cận và chấp nhận rủi ro trước khi biết kết quả.`,
 
-    event_type:
-      "normal",
+      event_type:
+        "money_main_quest",
 
-    choices: [
-      {
-        id: "a",
+      choices: [
+        {
+          id: "a",
+          title:
+            "Nhận cơ hội và làm ngay",
+          description:
+            "Bạn chấp nhận công việc và bắt đầu thực hiện.",
+        },
+        {
+          id: "b",
+          title:
+            "Tìm hiểu kỹ trước",
+          description:
+            "Bạn kiểm tra thông tin, người thuê và điều kiện trước khi quyết định.",
+        },
+        {
+          id: "c",
+          title:
+            "Thương lượng lại",
+          description:
+            "Bạn cố gắng giảm rủi ro và cải thiện điều kiện của công việc.",
+        },
+        {
+          id: "d",
+          title:
+            "Từ chối",
+          description:
+            "Bạn bỏ qua cơ hội và giữ nguyên tình trạng hiện tại.",
+        },
+      ],
+    };
+  }
 
-        title:
-          "Tiếp tục tiến lên",
+  const variants = [
+    {
+      title: `Một dấu hiệu bất thường - Vòng ${round}`,
+      description:
+        `Tại ${player.location}, bạn nhận ra một chi tiết bất thường có thể ảnh hưởng đến kế hoạch hiện tại. Bạn cần quyết định có nên kiểm tra hay tiếp tục.`,
+      choices: [
+        {
+          id: "a",
+          title: "Kiểm tra",
+          description: "Bạn dành thời gian tìm hiểu chuyện gì đang xảy ra.",
+        },
+        {
+          id: "b",
+          title: "Bỏ qua",
+          description: "Bạn không để chuyện này làm lệch kế hoạch.",
+        },
+        {
+          id: "c",
+          title: "Hỏi người gần đó",
+          description: "Bạn tìm một người có thể cung cấp thêm thông tin.",
+        },
+        {
+          id: "d",
+          title: "Chờ thêm",
+          description: "Bạn quan sát thêm trước khi quyết định.",
+        },
+      ],
+    },
+    {
+      title: `Một cơ hội nhỏ - Vòng ${round}`,
+      description:
+        `Một cơ hội thực tế xuất hiện gần ${player.location}. Nó chưa chắc mang lại lợi ích, nhưng có thể mở ra một hướng mới nếu bạn chủ động tìm hiểu.`,
+      choices: [
+        {
+          id: "a",
+          title: "Tìm hiểu",
+          description: "Bạn hỏi kỹ về cơ hội này.",
+        },
+        {
+          id: "b",
+          title: "Thử ngay",
+          description: "Bạn chủ động tiếp cận cơ hội.",
+        },
+        {
+          id: "c",
+          title: "Thương lượng",
+          description: "Bạn tìm cách giảm rủi ro trước khi tham gia.",
+        },
+        {
+          id: "d",
+          title: "Bỏ qua",
+          description: "Bạn giữ kế hoạch hiện tại.",
+        },
+      ],
+    },
+    {
+      title: `Một vấn đề đời thường - Vòng ${round}`,
+      description:
+        `Một vấn đề nhỏ phát sinh tại ${player.location}. Nó chưa phải khủng hoảng, nhưng cách bạn xử lý có thể ảnh hưởng đến những việc tiếp theo.`,
+      choices: [
+        {
+          id: "a",
+          title: "Giải quyết ngay",
+          description: "Bạn xử lý vấn đề trước khi tiếp tục.",
+        },
+        {
+          id: "b",
+          title: "Tìm người giúp",
+          description: "Bạn nhờ một người phù hợp hỗ trợ.",
+        },
+        {
+          id: "c",
+          title: "Tạm hoãn",
+          description: "Bạn giữ vấn đề lại và ưu tiên kế hoạch hiện tại.",
+        },
+        {
+          id: "d",
+          title: "Tìm phương án khác",
+          description: "Bạn thử một cách xử lý khác.",
+        },
+      ],
+    },
+  ];
 
-        description:
-          "Bạn quyết định tiếp tục hành trình.",
-      },
-
-      {
-        id: "b",
-
-        title:
-          "Tìm cơ hội kiếm tiền",
-
-        description:
-          "Bạn dành thời gian tìm một cơ hội mới.",
-      },
-
-      {
-        id: "c",
-
-        title:
-          "Nghỉ ngơi",
-
-        description:
-          "Bạn tạm thời nghỉ ngơi để chuẩn bị cho chặng tiếp theo.",
-      },
-
-      {
-        id: "d",
-
-        title:
-          "Khám phá khu vực",
-
-        description:
-          "Bạn khám phá nơi mình đang ở.",
-      },
-    ],
-  };
+  return variants[
+    Math.max(0, round - 1) % variants.length
+  ];
 }
+
 
 /**
  * Generate one private event for every active player.
@@ -304,13 +410,87 @@ export async function generatePlayerRoundEvents(
   }
 
   /* =====================================================
+     RECENT EVENT HISTORY
+
+     Load the last five private events per player from this
+     session so the AI can distinguish story continuation
+     from repeating the same scene.
+     ===================================================== */
+
+  const {
+    data: recentEventRows,
+    error: recentEventsError,
+  } = await supabase
+    .from("player_round_events")
+    .select(
+      `
+        player_id,
+        round,
+        title,
+        description,
+        status,
+        event_type
+      `
+    )
+    .eq("room_id", roomId)
+    .eq("session_id", sessionId)
+    .lt("round", round)
+    .in(
+      "player_id",
+      activePlayers.map((player) => player.id)
+    )
+    .order("round", { ascending: false })
+    .limit(activePlayers.length * 4);
+
+  if (recentEventsError) {
+    throw new Error(
+      `Failed to load recent player event history: ${recentEventsError.message}`
+    );
+  }
+
+  const recentEventsByPlayer =
+    new Map<
+      string,
+      {
+        round: number;
+        title: string;
+        description: string;
+        status: string | null;
+        event_type: string | null;
+      }[]
+    >();
+
+  for (const row of recentEventRows ?? []) {
+    const current =
+      recentEventsByPlayer.get(row.player_id) ?? [];
+
+    if (current.length >= 4) {
+      continue;
+    }
+
+    current.push({
+      round: row.round,
+      title: String(row.title ?? "").slice(0, 140),
+      description: String(row.description ?? "").slice(0, 260),
+      status: row.status ?? null,
+      event_type: row.event_type ?? null,
+    });
+
+    recentEventsByPlayer.set(
+      row.player_id,
+      current
+    );
+  }
+
+  /* =====================================================
      AI CONTEXT
      ===================================================== */
 
   const aiContext =
     buildAIContext(
       round,
-      activePlayers
+      activePlayers,
+      recentEventsByPlayer
     );
 
   /* =====================================================
@@ -355,13 +535,41 @@ export async function generatePlayerRoundEvents(
       aiResponse =
         null;
     }
+
+    /*
+     * The round scheduler is the source of truth.
+     * Never allow AI to change the Money Quest schedule.
+     */
+    if (aiResponse) {
+      const moneyQuest =
+        isMoneyQuestRound(round);
+
+      const invalidMoneySchedule =
+        aiResponse.players.some(
+          (result) =>
+            moneyQuest
+              ? result.event.type !==
+                "money_main_quest"
+              : result.event.type ===
+                "money_main_quest"
+        );
+
+      if (invalidMoneySchedule) {
+        console.warn(
+          "AI violated Money Quest schedule. Using fallback events."
+        );
+
+        aiResponse =
+          null;
+      }
+    }
   } catch (error) {
-  console.error(
-    "AI HOST EVENT GENERATION FAILED:",
-    error
-  );
-  aiResponse = null;
-}
+    console.error(
+      "AI HOST EVENT GENERATION FAILED:",
+      error
+    );
+    aiResponse = null;
+  }
 
   /* =====================================================
      CREATE ROWS
@@ -394,7 +602,8 @@ export async function generatePlayerRoundEvents(
         const fallback =
           buildFallbackPrivateEvent(
             round,
-            player
+            player,
+            isMoneyQuestRound(round)
           );
 
         const event =
@@ -424,9 +633,15 @@ export async function generatePlayerRoundEvents(
             event.description,
 
           event_type:
-  "type" in event
-    ? event.type
-    : event.event_type,
+            isMoneyQuestRound(round)
+              ? "money_main_quest"
+              : (
+                  "type" in event
+                    ? event.type
+                    : "event_type" in event
+                      ? event.event_type
+                      : "normal"
+                ),
 
           choices:
             event.choices,

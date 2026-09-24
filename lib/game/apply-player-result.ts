@@ -43,6 +43,7 @@ export type PlayerResultApplication = {
    This prevents the resolve layer from accidentally
    using a different event than the one the player
    actually saw.
+
    ===================================================== */
 
 export function applyPlayerResult(

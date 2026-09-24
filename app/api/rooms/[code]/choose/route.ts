@@ -3,12 +3,14 @@ import { createClient } from "@supabase/supabase-js";
 
 import type {
   BackendChoice,
+  EventData,
   Player,
   PlayerVote,
 } from "@/lib/game/types";
 
 import { getVoteProgress } from "@/lib/game/vote";
 import { generatePlayerRoundEvents } from "@/lib/game/rounds";
+import { resolveCurrentRound } from "@/lib/game/resolve-service";
 
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -111,33 +113,12 @@ const EMPTY_UUID =
 
 /* =====================================================
    SHOP SCHEDULE
-   =====================================================
-
-   Shop mở SAU khi hoàn thành mỗi 6 round:
-
-   Round 6  -> Shop -> Round 7
-   Round 12 -> Shop -> Round 13
-   Round 18 -> Shop -> Round 19
-   Round 24 -> Shop -> Round 25
-
-   Round tiếp theo vẫn được generate sẵn,
-   nhưng game_sessions.phase = "shop" nên
-   người chơi không thể vote cho tới khi shop đóng.
    ===================================================== */
 
 const SHOP_INTERVAL = 6;
 
 /* =====================================================
    GET ACTIVE PLAYERS
-   =====================================================
-
-   SOURCE OF TRUTH cho vote.
-
-   Host + player
-   + moderation_status = active
-
-   Spectator không vote.
-   Kicked / banned không vote.
    ===================================================== */
 
 async function getActivePlayers(
@@ -504,11 +485,6 @@ async function autoResolve(
 ) {
   /* ===================================================
      1. LOAD ACTIVE PLAYERS AGAIN
-
-     KHÔNG tin danh sách players truyền từ request.
-
-     Query DB lại ngay trước khi resolve để xử lý
-     trường hợp player vừa bị kick / ban.
      =================================================== */
 
   const {
@@ -547,10 +523,6 @@ async function autoResolve(
       alreadyResolving: false,
     };
   }
-
-  /* ===================================================
-     NO ACTIVE PLAYERS
-     =================================================== */
 
   if (
     players.length === 0
@@ -620,10 +592,6 @@ async function autoResolve(
     };
   }
 
-  /* ===================================================
-     SOMEONE ELSE ALREADY CLAIMED RESOLVE
-     =================================================== */
-
   if (!claimedSession) {
     return {
       resolved: false,
@@ -655,10 +623,6 @@ async function autoResolve(
 
   /* ===================================================
      5. GET VOTES
-
-     Chỉ lấy vote của ACTIVE players.
-
-     Vote của player đã bị kick/ban bị bỏ qua.
      =================================================== */
 
   const {
@@ -779,10 +743,6 @@ async function autoResolve(
     }
   );
 
-  /* ===================================================
-     NOT ENOUGH VOTES
-     =================================================== */
-
   if (
     !finalProgress.allPlayersChosen
   ) {
@@ -844,10 +804,6 @@ async function autoResolve(
     };
   }
 
-  /* ===================================================
-     EXACT COUNT CHECK
-     =================================================== */
-
   if (
     finalProgress.chosenPlayers !==
     finalProgress.totalPlayers
@@ -899,47 +855,26 @@ async function autoResolve(
   }
 
   /* ===================================================
-     7. SAVE RESOLVE RESULT
+     7. LOAD FULL SOURCE EVENT
+     
+     QUAN TRỌNG:
+     resolveCurrentRound() cần event đầy đủ.
      =================================================== */
 
-  const resolveResult = {
-    resolved:
-      true,
-
-    session_id:
-      sessionId,
-
-    event_id:
-      eventId,
-
-    round,
-
-    votes:
-      votes.map(
-        (vote) => ({
-          player_id:
-            vote.player_id,
-
-          choice_id:
-            vote.choice_id,
-        })
-      ),
-
-    effects: [],
-  };
-
   const {
+    data: currentEvent,
     error:
-      saveResultError,
+      currentEventError,
   } = await supabase
     .from("game_events")
-    .update({
-      result:
-        resolveResult,
-    })
+    .select("*")
     .eq(
       "id",
       eventId
+    )
+    .eq(
+      "room_id",
+      roomId
     )
     .eq(
       "session_id",
@@ -948,12 +883,16 @@ async function autoResolve(
     .eq(
       "round",
       round
-    );
+    )
+    .maybeSingle();
 
-  if (saveResultError) {
+  if (
+    currentEventError ||
+    !currentEvent
+  ) {
     console.error(
-      "RESOLVE SAVE RESULT ERROR:",
-      saveResultError
+      "RESOLVE LOAD FULL EVENT ERROR:",
+      currentEventError
     );
 
     await supabase
@@ -997,136 +936,92 @@ async function autoResolve(
     };
   }
 
-  /* ===================================================
-     8. RESET LAST CHOICE
-
-     Chỉ reset ACTIVE players.
-
-     Player kicked/ban không cần reset.
-     =================================================== */
-
-  const {
-    error:
-      resetChoiceError,
-  } = await supabase
-    .from("room_players")
-    .update({
-      last_choice:
-        null,
-    })
-    .eq(
-      "room_id",
-      roomId
-    )
-    .in(
-      "role",
-      ["host", "player"]
-    )
-    .eq(
-      "moderation_status",
-      "active"
-    );
-
-  if (resetChoiceError) {
-    console.error(
-      "RESOLVE RESET CHOICE ERROR:",
-      resetChoiceError
-    );
-  }
+  const fullEvent =
+    currentEvent as EventData;
 
   /* ===================================================
-     9. NEXT ROUND
+     8. REAL ROUND RESOLUTION
+     
+     ĐÂY LÀ PHẦN BỊ THIẾU TRƯỚC ĐÂY.
+
+     resolveCurrentRound():
+     - resolve AI outcome
+     - applyPlayerResult
+     - money-engine
+     - update player stats
+     - write player_stat_history
+     - write player_round_events.result
+     - mark player_round_events resolved
+     - write game_events.result
      =================================================== */
 
-  const nextRound =
-    round + 1;
-
-  const nextEvent =
-    await generateNextEvent(
-      roomId,
-      sessionId,
-      nextRound
-    );
-
-  /* ===================================================
-     9B. GENERATE PRIVATE PLAYER EVENTS
-     =================================================== */
-
-  const {
-    players: nextRoundPlayers,
-    error:
-      nextRoundPlayersError,
-  } = await getActivePlayers(
-    roomId
-  );
-
-  if (nextRoundPlayersError) {
-    console.error(
-      "RESOLVE NEXT ROUND PLAYERS ERROR:",
-      nextRoundPlayersError
-    );
-
-    await supabase
-      .from("game_sessions")
-      .update({
-        phase:
-          "choosing",
-      })
-      .eq(
-        "id",
-        sessionId
-      )
-      .eq(
-        "status",
-        "active"
-      )
-      .eq(
-        "round",
-        round
-      )
-      .eq(
-        "phase",
-        "resolving"
-      )
-      .eq(
-        "current_event_id",
-        eventId
-      );
-
-    await syncGameState(
-      sessionId,
-      roomId,
-      round,
-      "choosing",
-      eventId
-    );
-
-    return {
-      resolved: false,
-      alreadyResolving: false,
-    };
-  }
+  let resolvedService;
 
   try {
-    await generatePlayerRoundEvents({
-      supabase,
+    console.log(
+      "AUTO RESOLVE → CALL resolveCurrentRound",
+      {
+        roomId,
+        sessionId,
+        eventId,
+        round,
+        players:
+          players.length,
+        votes:
+          votes.length,
+      }
+    );
 
-      roomId,
+    resolvedService =
+      await resolveCurrentRound({
+        supabase,
 
-      sessionId,
+        roomId,
 
-      round:
-        nextRound,
+        sessionId,
 
-      players:
-        nextRoundPlayers,
+        round,
 
-      sourceEventId:
-        nextEvent.id,
-    });
+        event:
+          fullEvent,
+
+        players,
+
+        votes,
+      });
+
+    console.log(
+      "AUTO RESOLVE → resolveCurrentRound SUCCESS",
+      {
+        roomId,
+
+        sessionId,
+
+        eventId,
+
+        round,
+
+        appliedPlayers:
+          resolvedService.appliedPlayers.map(
+            (item) => ({
+              player_id:
+                item.player_id,
+
+              money_before:
+                item.money_before,
+
+              money_after:
+                item.money_after,
+
+              effects:
+                item.effects,
+            })
+          ),
+      }
+    );
   } catch (error) {
     console.error(
-      "RESOLVE GENERATE PRIVATE EVENTS ERROR:",
+      "AUTO RESOLVE → resolveCurrentRound ERROR:",
       error
     );
 
@@ -1168,23 +1063,121 @@ async function autoResolve(
     return {
       resolved: false,
       alreadyResolving: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Không thể resolve round.",
     };
   }
 
   /* ===================================================
-     9C. SHOP TRANSITION
-     ===================================================
+     9. RESET LAST CHOICE
+     =================================================== */
 
-     Shop mở SAU mỗi 6 round hoàn thành.
+  const {
+    error:
+      resetChoiceError,
+  } = await supabase
+    .from("room_players")
+    .update({
+      last_choice:
+        null,
+    })
+    .eq(
+      "room_id",
+      roomId
+    )
+    .in(
+      "role",
+      ["host", "player"]
+    )
+    .eq(
+      "moderation_status",
+      "active"
+    );
 
-     Round 6  -> Shop -> Round 7
-     Round 12 -> Shop -> Round 13
-     Round 18 -> Shop -> Round 19
-     Round 24 -> Shop -> Round 25
+  if (resetChoiceError) {
+    console.error(
+      "RESOLVE RESET CHOICE ERROR:",
+      resetChoiceError
+    );
+  }
 
-     Round tiếp theo đã được generate sẵn,
-     nhưng người chơi không thể vote cho tới khi
-     shop flow đóng phase "shop".
+  /* ===================================================
+     10. NEXT ROUND
+     =================================================== */
+
+  const nextRound =
+    round + 1;
+
+  const nextEvent =
+    await generateNextEvent(
+      roomId,
+      sessionId,
+      nextRound
+    );
+
+  /* ===================================================
+     11. GENERATE PRIVATE PLAYER EVENTS
+     =================================================== */
+
+  const {
+    players: nextRoundPlayers,
+    error:
+      nextRoundPlayersError,
+  } = await getActivePlayers(
+    roomId
+  );
+
+  if (nextRoundPlayersError) {
+    console.error(
+      "RESOLVE NEXT ROUND PLAYERS ERROR:",
+      nextRoundPlayersError
+    );
+
+    return {
+      resolved: false,
+      alreadyResolving: false,
+      error:
+        "Không thể lấy người chơi cho round tiếp theo.",
+    };
+  }
+
+  try {
+    await generatePlayerRoundEvents({
+      supabase,
+
+      roomId,
+
+      sessionId,
+
+      round:
+        nextRound,
+
+      players:
+        nextRoundPlayers,
+
+      sourceEventId:
+        nextEvent.id,
+    });
+  } catch (error) {
+    console.error(
+      "RESOLVE GENERATE PRIVATE EVENTS ERROR:",
+      error
+    );
+
+    return {
+      resolved: false,
+      alreadyResolving: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Không thể tạo player events.",
+    };
+  }
+
+  /* ===================================================
+     12. SHOP TRANSITION
      =================================================== */
 
   const shouldOpenShop =
@@ -1197,7 +1190,7 @@ async function autoResolve(
       : "choosing";
 
   /* ===================================================
-     10. MOVE TO NEXT ROUND
+     13. MOVE TO NEXT ROUND
      =================================================== */
 
   const {
@@ -1254,6 +1247,8 @@ async function autoResolve(
     return {
       resolved: false,
       alreadyResolving: false,
+      error:
+        nextSessionError.message,
     };
   }
 
@@ -1265,7 +1260,7 @@ async function autoResolve(
   }
 
   /* ===================================================
-     11. SYNC NEXT ROUND
+     14. SYNC NEXT ROUND
      =================================================== */
 
   await syncGameState(
@@ -1488,8 +1483,6 @@ export async function POST(
 
     /* ===================================================
        PLAYER AUTH
-
-       ACTIVE ONLY
        =================================================== */
 
     const {
@@ -1695,12 +1688,6 @@ export async function POST(
         playerEventId
       );
 
-    /*
-     * Legacy fallback:
-     * Round đầu / dữ liệu cũ có thể chưa có
-     * player_round_events.
-     */
-
     const isPrivatePlayerEvent =
       Boolean(playerEvent);
 
@@ -1767,7 +1754,12 @@ export async function POST(
         room_id,
         session_id,
         round,
-        choices
+        title,
+        description,
+        event_type,
+        choices,
+        result,
+        created_at
       `)
       .eq(
         "id",
@@ -2215,11 +2207,6 @@ export async function POST(
       );
     }
 
-    /*
-     * Session có thể đã chuyển round trong
-     * lúc request đang chạy.
-     */
-
     if (
       !latestSession ||
       latestSession.round !==
@@ -2473,6 +2460,43 @@ export async function POST(
             "Tất cả người chơi đã lựa chọn. Đang xử lý kết quả...",
         });
       }
+
+      /* ===============================================
+         RESOLVE FAILED
+         =============================================== */
+
+      return NextResponse.json(
+        {
+          success:
+            false,
+
+          choice: {
+            id:
+              savedChoice.id,
+
+            choice_id:
+              savedChoice.choice_id,
+
+            event_id:
+              savedChoice.event_id,
+
+            created_at:
+              savedChoice.created_at,
+          },
+
+          progress,
+
+          resolved:
+            false,
+
+          error:
+            resolve.error ??
+            "Không thể xử lý kết quả round.",
+        },
+        {
+          status: 500,
+        }
+      );
     }
 
     /* ===================================================
