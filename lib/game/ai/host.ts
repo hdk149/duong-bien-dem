@@ -1,9 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 import Groq from "groq-sdk";
 
-import {
-    callLocalAIJson,
-    type LocalAIMessage,
+import type {
+    LocalAIMessage,
 } from "@/lib/ai/local";
 
 import type {
@@ -116,6 +115,291 @@ async function generateWithRetry<T>(
     }
 
     throw lastError;
+}
+
+/* =====================================================
+      LOCAL AI REMOTE GATEWAY
+      ===================================================== */
+
+type LocalAIJsonSchema = {
+    name: string;
+    strict?: boolean;
+    schema: Record<string, unknown>;
+};
+
+type LocalAIJsonOptions = {
+    temperature?: number;
+    topP?: number;
+    maxTokens?: number;
+};
+
+function getLocalAIGatewayConfig() {
+    const baseUrl =
+        process.env.LOCAL_AI_BASE_URL?.trim();
+
+    const apiKey =
+        process.env.LOCAL_AI_KEY?.trim();
+
+    const model =
+        process.env.LOCAL_AI_MODEL?.trim() ||
+        "qwen/qwen3-4b-2507";
+
+    if (!baseUrl) {
+        throw new Error(
+            "LOCAL_AI_BASE_URL is not configured."
+        );
+    }
+
+    if (!apiKey) {
+        throw new Error(
+            "LOCAL_AI_KEY is not configured."
+        );
+    }
+
+    return {
+        baseUrl: baseUrl.replace(/\/+$/, ""),
+        apiKey,
+        model,
+    };
+}
+
+async function callLocalAIGatewayJson<T>(
+    messages: LocalAIMessage[],
+    jsonSchema: LocalAIJsonSchema,
+    options: LocalAIJsonOptions = {},
+): Promise<{
+    data: T;
+    raw: {
+        usage?: unknown;
+        finishReason?: unknown;
+        model?: unknown;
+    };
+}> {
+    const {
+        baseUrl,
+        apiKey,
+        model,
+    } = getLocalAIGatewayConfig();
+
+    const controller =
+        new AbortController();
+
+    const timeout =
+        setTimeout(
+            () => controller.abort(),
+            60000,
+        );
+
+    try {
+      console.log("🔥 LOCAL GATEWAY FETCH START", {
+    baseUrl,
+    model,
+    hasKey: Boolean(apiKey),
+});  
+      const response =
+            await fetch(
+                `${baseUrl}/v1/chat/completions`,
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+
+                        Authorization:
+                            `Bearer ${apiKey}`,
+                    },
+
+                    body:
+                        JSON.stringify({
+                            model,
+
+                            messages,
+
+                            temperature:
+                                options.temperature ??
+                                0.7,
+
+                            top_p:
+                                options.topP ??
+                                0.9,
+
+                            max_tokens:
+                                options.maxTokens ??
+                                1200,
+
+                            response_format: {
+                                type:
+                                    "json_schema",
+
+                                json_schema: {
+                                    name:
+                                        jsonSchema.name,
+
+                                    strict:
+                                        jsonSchema.strict ??
+                                        true,
+
+                                    schema:
+                                        jsonSchema.schema,
+                                },
+                            },
+                        }),
+
+                    signal:
+                        controller.signal,
+                },
+            );
+
+        const responseText =
+            await response.text();
+
+        if (!response.ok) {
+            throw new Error(
+                `Local AI Gateway HTTP ${response.status}: ${responseText.slice(
+                    0,
+                    500,
+                )}`,
+            );
+        }
+
+        let payload:
+            Record<string, unknown>;
+
+        try {
+            payload =
+                JSON.parse(
+                    responseText,
+                ) as Record<string, unknown>;
+        } catch {
+            throw new Error(
+                "Local AI Gateway returned invalid JSON.",
+            );
+        }
+
+        const choices =
+            payload.choices;
+
+        if (
+            !Array.isArray(choices) ||
+            choices.length === 0
+        ) {
+            throw new Error(
+                "Local AI Gateway returned no choices.",
+            );
+        }
+
+        const firstChoice =
+            choices[0];
+
+        if (
+            !firstChoice ||
+            typeof firstChoice !== "object" ||
+            Array.isArray(firstChoice)
+        ) {
+            throw new Error(
+                "Local AI Gateway returned an invalid choice.",
+            );
+        }
+
+        const message =
+            (
+                firstChoice as
+                Record<string, unknown>
+            ).message;
+
+        if (
+            !message ||
+            typeof message !== "object" ||
+            Array.isArray(message)
+        ) {
+            throw new Error(
+                "Local AI Gateway returned an invalid message.",
+            );
+        }
+
+        const content =
+            (
+                message as
+                Record<string, unknown>
+            ).content;
+
+        let contentText = "";
+
+        if (
+            typeof content === "string"
+        ) {
+            contentText = content;
+        } else if (
+            Array.isArray(content)
+        ) {
+            contentText =
+                content
+                    .map((part) => {
+                        if (
+                            part &&
+                            typeof part === "object" &&
+                            !Array.isArray(part)
+                        ) {
+                            const value =
+                                (
+                                    part as
+                                    Record<string, unknown>
+                                ).text;
+
+                            return typeof value ===
+                                "string"
+                                ? value
+                                : "";
+                        }
+
+                        return "";
+                    })
+                    .join("");
+        }
+
+        if (!contentText.trim()) {
+            throw new Error(
+                "Local AI Gateway returned empty content.",
+            );
+        }
+
+        const data =
+            extractJson(
+                contentText,
+            ) as T;
+
+        return {
+            data,
+
+            raw: {
+                usage:
+                    payload.usage,
+
+                finishReason:
+                    (
+                        firstChoice as
+                        Record<string, unknown>
+                    ).finish_reason,
+
+                model:
+                    payload.model,
+            },
+        };
+    } catch (error) {
+        if (
+            error instanceof Error &&
+            error.name === "AbortError"
+        ) {
+            throw new Error(
+                "Local AI Gateway timed out after 60 seconds.",
+            );
+        }
+
+        throw error;
+    } finally {
+        clearTimeout(timeout);
+    }
 }
 
 /* =====================================================
@@ -2073,7 +2357,7 @@ FINAL CHECK:
     ];
 
     const result =
-        await callLocalAIJson<unknown>(
+    await callLocalAIGatewayJson<unknown>(
             messages,
 
             {
@@ -2518,7 +2802,7 @@ Không bao gi? dùng location r?ng.
     ];
 
     const result =
-        await callLocalAIJson<unknown>(
+    await callLocalAIGatewayJson<unknown>(
             messages,
 
             {
