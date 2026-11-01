@@ -2,6 +2,7 @@ https://duong-bien-a3f7hgqvf-duong-bien-dem.vercel.app/
 
 ## Gameplay Preview
 
+![Đường Biên Đêm gameplay screenshot](./Screenshot%202026-11-02%20at%2004.01.14.png)
 
 🌒 ĐƯỜNG BIÊN ĐÊM
 
