@@ -1,1 +1,56 @@
+name: Supabase Keep Alive
 
+on:
+  schedule:
+    # 3 times per day (UTC): 04:17, 12:17, 20:17
+    - cron: "17 4,12,20 * * *"
+
+  # Allow a manual test from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keep-alive:
+    name: Check Supabase database
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Call the protected keep-alive endpoint
+        shell: bash
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          KEEPALIVE_URL: https://hdk.lol/api/cron/keep-supabase-active
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CRON_SECRET:-}" ]]; then
+            echo "::error::GitHub Actions secret CRON_SECRET is missing."
+            exit 1
+          fi
+
+          response="$(curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --retry 3 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --max-time 30 \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            "${KEEPALIVE_URL}")"
+
+          echo "Endpoint response: ${response}"
+
+          if ! grep -q '"success":true' <<< "${response}"; then
+            echo "::error::Endpoint did not return success=true."
+            exit 1
+          fi
+
+          echo "Supabase keep-alive check passed."
