@@ -26,7 +26,7 @@ jobs:
         shell: bash
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          KEEPALIVE_URL: https://hdk.lol/api/cron/keep-supabase-active
+          KEEPALIVE_URL: https://duong-bien-lj338z45q-duong-bien-dem.vercel.app/api/cron/keep-supabase-active
         run: |
           set -euo pipefail
 
