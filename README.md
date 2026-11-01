@@ -1,5 +1,9 @@
 https://duong-bien-a3f7hgqvf-duong-bien-dem.vercel.app/
 
+## Gameplay Preview
+
+![Duong Bien Dem Gameplay](./Screenshot 2026-11-02 at 04.01.14.png)
+
 🌒 ĐƯỜNG BIÊN ĐÊM
 
 One World. Many Stories. Every Choice Matters.
